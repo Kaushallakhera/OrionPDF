@@ -24,14 +24,40 @@ jobs:
       with:
         gradle-version: '8.7'
 
-    - name: Build Debug APK
+    - name: Auto-generate Missing Root Gradle Settings
       run: |
-        if [ -f "./gradlew" ]; then
-          chmod +x gradlew
-          ./gradlew assembleDebug
-        else
-          gradle assembleDebug
+        if [ ! -f "settings.gradle.kts" ] && [ ! -f "settings.gradle" ]; then
+          cat << 'EOF' > settings.gradle.kts
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+            plugins {
+                id("com.android.application") version "8.7.0"
+                id("com.android.library") version "8.7.0"
+                id("org.jetbrains.kotlin.android") version "2.0.0"
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        rootProject.name = "OrionPDF"
+        include(":app")
+        EOF
         fi
+
+        if [ ! -f "build.gradle.kts" ] && [ ! -f "build.gradle" ]; then
+          touch build.gradle.kts
+        fi
+
+    - name: Build Debug APK
+      run: gradle :app:assembleDebug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
