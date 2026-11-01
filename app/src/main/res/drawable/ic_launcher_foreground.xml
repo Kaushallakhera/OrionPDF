@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Minimalist back page layer (warm rose-terracotta accent) -->
+    <path
+        android:fillColor="#9E473E"
+        android:pathData="M34,29 L62,29 C65.3,29 68,31.7 68,35 L68,73 C68,76.3 65.3,79 62,79 L34,79 C30.7,79 28,76.3 28,73 L28,35 C28,31.7 30.7,29 34,29 Z" />
+
+    <!-- Minimalist primary PDF document sheet with folded top-right corner -->
+    <path
+        android:fillColor="#F5EFEA"
+        android:pathData="M40,25 L64,25 L78,39 L78,75 C78,78.3 75.3,81 72,81 L40,81 C36.7,81 34,78.3 34,75 L34,31 C34,27.7 36.7,25 40,25 Z" />
+
+    <!-- Folded corner flap -->
+    <path
+        android:fillColor="#D99B93"
+        android:pathData="M64,25 L64,35 C64,37.2 65.8,39 68,39 L78,39 Z" />
+
+    <!-- Minimalist Crimson Bookmark Ribbon on left edge -->
+    <path
+        android:fillColor="#B83B31"
+        android:pathData="M42,25 L50,25 L50,45 L46,41.5 L42,45 Z" />
+
+    <!-- Minimalist geometric typography bars -->
+    <path
+        android:fillColor="#2B1D1B"
+        android:pathData="M42,51 L70,51 L70,55 L42,55 Z M42,59 L64,59 L64,63 L42,63 Z" />
+
+    <!-- Warm gold highlight bar -->
+    <path
+        android:fillColor="#E3B34C"
+        android:pathData="M42,67 L58,67 L58,71 L42,71 Z" />
+
+    <!-- Minimalist 4-point Orion star emblem at bottom right -->
+    <path
+        android:fillColor="#B83B31"
+        android:pathData="M68,61 L70.2,66.8 L76,69 L70.2,71.2 L68,77 L65.8,71.2 L60,69 L65.8,66.8 Z" />
+</vector>

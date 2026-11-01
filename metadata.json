@@ -1,0 +1,6 @@
+{
+  "name": "Orion PDF Reader",
+  "description": "Ultra-fast mobile PDF viewer with smooth low-memory scrolling, 8 reading color themes, and integrated sidebar annotation tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

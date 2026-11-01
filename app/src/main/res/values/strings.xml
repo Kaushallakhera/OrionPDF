@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">Orion PDF Reader</string>
+    <string name="tab_files">Files</string>
+    <string name="tab_recent">Recent</string>
+    <string name="tab_favorites">Favorites</string>
+    <string name="tab_folders">Folders</string>
+    <string name="continue_reading">Continue reading</string>
+    <string name="folders_segment">Folders</string>
+    <string name="authors_segment">Authors</string>
+    <string name="reading_settings">Reading settings</string>
+    <string name="use_system_brightness">Use system brightness</string>
+    <string name="vertical_scroll">Vertical scroll</string>
+    <string name="swipe_by_page">Swipe by page</string>
+    <string name="show_scroll_bar">Show scroll bar</string>
+    <string name="pro_version">Pro Version</string>
+    <string name="open_file_from_device">Open a file from device</string>
+    <string name="open_file_subtitle">Any PDF, via the system file picker</string>
+    <string name="rescan_storage">Rescan storage</string>
+    <string name="settings_title">Settings</string>
+    <string name="leave_rating">Leave a rating</string>
+    <string name="feedback_title">Feedback</string>
+    <string name="action_share">Share</string>
+    <string name="action_open_with">Open with</string>
+    <string name="action_print">Print</string>
+    <string name="action_file_info">File info</string>
+    <string name="action_read_aloud">Read aloud</string>
+    <string name="action_auto_scroll">Auto-scroll</string>
+    <string name="action_bookmarks">Bookmarks</string>
+    <string name="action_quotes">Quotes</string>
+    <string name="action_pin_notification">Pin notification</string>
+    <string name="action_show_in_folder">Show in folder</string>
+    <string name="action_delete">Delete</string>
+    <string name="reader_contents">Contents</string>
+    <string name="reader_reflow">Reflow</string>
+    <string name="reader_bookmark">Bookmark</string>
+    <string name="reader_display">Display</string>
+</resources>

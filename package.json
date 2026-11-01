@@ -1,0 +1,11 @@
+{
+  "name": "orion-pdf-reader",
+  "version": "1.18.2",
+  "private": true,
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "node verify-android.mjs",
+    "start": "node server.mjs",
+    "lint": "node verify-android.mjs"
+  }
+}
