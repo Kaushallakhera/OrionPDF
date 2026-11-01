@@ -120,6 +120,31 @@ jobs:
         google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
         EOF
 
+        # 5. Generate missing XML and style resources required by AndroidManifest.xml
+        mkdir -p app/src/main/res/xml
+        mkdir -p app/src/main/res/values
+
+        cat << 'EOF' > app/src/main/res/xml/data_extraction_rules.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <data-extraction-rules>
+            <cloud-backup><include domain="sharedpref" path="."/></cloud-backup>
+        </data-extraction-rules>
+        EOF
+
+        cat << 'EOF' > app/src/main/res/xml/backup_rules.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <full-backup-content>
+            <include domain="sharedpref" path="."/>
+        </full-backup-content>
+        EOF
+
+        cat << 'EOF' > app/src/main/res/values/themes.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+        </resources>
+        EOF
+
     - name: Build Debug APK
       run: gradle :app:assembleDebug -x test -x lint
 
