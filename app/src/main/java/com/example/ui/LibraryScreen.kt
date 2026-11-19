@@ -32,30 +32,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.ViewList
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.History
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -88,6 +81,7 @@ fun LibraryScreen(
     recentDocuments: List<PdfDocumentEntity>,
     filteredDocuments: List<PdfDocumentEntity>,
     folderGroups: List<FolderGroupItem>,
+    availableVolumes: List<String>,
     onSelectTab: (BottomNavTab) -> Unit,
     onSelectFoldersSegment: (FoldersSegment) -> Unit,
     onOpenFolderGroup: (String?) -> Unit,
@@ -99,7 +93,11 @@ fun LibraryScreen(
     onOpenDocument: (PdfDocumentEntity) -> Unit,
     onOpenDocumentMenu: (PdfDocumentEntity) -> Unit,
     onOpenAppMoreSheet: () -> Unit,
-    onOpenCreateFolderDialog: () -> Unit
+    onOpenCreateFolderDialog: () -> Unit,
+    onRequestStoragePermission: () -> Unit,
+    onPickPdfFromDevice: () -> Unit,
+    onPickFolderFromDevice: () -> Unit,
+    onRescanStorage: () -> Unit
 ) {
     if (libraryState.selectedFolderName != null) {
         BackHandler {
@@ -157,7 +155,7 @@ fun LibraryScreen(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Default.Description,
+                                    imageVector = OrionIcons.Description,
                                     contentDescription = "Orion PDF Reader Icon",
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp)
@@ -182,7 +180,7 @@ fun LibraryScreen(
                             modifier = Modifier.testTag("create_folder_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CreateNewFolder,
+                                imageVector = OrionIcons.CreateNewFolder,
                                 contentDescription = "Create custom folder",
                                 tint = MaterialTheme.colorScheme.onBackground
                             )
@@ -243,6 +241,16 @@ fun LibraryScreen(
                 }
             }
         },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onPickPdfFromDevice,
+                icon = { Icon(OrionIcons.FolderOpen, contentDescription = null) },
+                text = { Text("Open PDF") },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.testTag("fab_open_pdf")
+            )
+        },
         bottomBar = {
             OrionBottomNavigationBar(
                 activeTab = libraryState.activeTab,
@@ -250,22 +258,53 @@ fun LibraryScreen(
             )
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            if (libraryState.isScanning) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = if (libraryState.scannedCount > 0) {
+                                "Scanning device storage… Found ${libraryState.scannedCount} PDFs"
+                            } else {
+                                "Scanning device folders for PDF files…"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+
             if (libraryState.activeTab == BottomNavTab.FOLDERS && libraryState.selectedFolderName == null) {
                 FoldersTabContent(
                     foldersSegment = libraryState.foldersSegment,
                     folderGroups = folderGroups,
                     storageFilter = libraryState.storageFilter,
+                    availableVolumes = availableVolumes,
+                    hasStoragePermission = libraryState.hasStoragePermission,
                     onSelectSegment = onSelectFoldersSegment,
                     onOpenFolder = { onOpenFolderGroup(it.name) },
-                    onStorageFilterChange = onStorageFilterChange
+                    onStorageFilterChange = onStorageFilterChange,
+                    onRequestStoragePermission = onRequestStoragePermission,
+                    onPickFolderFromDevice = onPickFolderFromDevice
                 )
             } else {
                 FilesListAndCarouselContent(
+                    activeTab = libraryState.activeTab,
+                    hasStoragePermission = libraryState.hasStoragePermission,
+                    isScanning = libraryState.isScanning,
                     showContinueReading = libraryState.activeTab == BottomNavTab.FILES &&
                         libraryState.selectedFolderName == null &&
                         libraryState.searchQuery.isBlank() &&
@@ -276,6 +315,7 @@ fun LibraryScreen(
                     sortAscending = libraryState.sortAscending,
                     isGridView = libraryState.isGridView,
                     storageFilter = libraryState.storageFilter,
+                    availableVolumes = availableVolumes,
                     showSortMenu = showSortMenu,
                     onShowSortMenuChange = { showSortMenu = it },
                     showFilterMenu = showFilterMenu,
@@ -284,7 +324,11 @@ fun LibraryScreen(
                     onToggleGridView = onToggleGridView,
                     onStorageFilterChange = onStorageFilterChange,
                     onOpenDocument = onOpenDocument,
-                    onOpenDocumentMenu = onOpenDocumentMenu
+                    onOpenDocumentMenu = onOpenDocumentMenu,
+                    onRequestStoragePermission = onRequestStoragePermission,
+                    onPickPdfFromDevice = onPickPdfFromDevice,
+                    onPickFolderFromDevice = onPickFolderFromDevice,
+                    onRescanStorage = onRescanStorage
                 )
             }
         }
@@ -293,6 +337,9 @@ fun LibraryScreen(
 
 @Composable
 private fun FilesListAndCarouselContent(
+    activeTab: BottomNavTab,
+    hasStoragePermission: Boolean,
+    isScanning: Boolean,
     showContinueReading: Boolean,
     recentDocuments: List<PdfDocumentEntity>,
     documents: List<PdfDocumentEntity>,
@@ -300,6 +347,7 @@ private fun FilesListAndCarouselContent(
     sortAscending: Boolean,
     isGridView: Boolean,
     storageFilter: String?,
+    availableVolumes: List<String>,
     showSortMenu: Boolean,
     onShowSortMenuChange: (Boolean) -> Unit,
     showFilterMenu: Boolean,
@@ -308,10 +356,22 @@ private fun FilesListAndCarouselContent(
     onToggleGridView: () -> Unit,
     onStorageFilterChange: (String?) -> Unit,
     onOpenDocument: (PdfDocumentEntity) -> Unit,
-    onOpenDocumentMenu: (PdfDocumentEntity) -> Unit
+    onOpenDocumentMenu: (PdfDocumentEntity) -> Unit,
+    onRequestStoragePermission: () -> Unit,
+    onPickPdfFromDevice: () -> Unit,
+    onPickFolderFromDevice: () -> Unit,
+    onRescanStorage: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (isGridView) {
+            if (!hasStoragePermission && activeTab == BottomNavTab.FILES) {
+                StoragePermissionOnboardingCard(
+                    compact = documents.isNotEmpty(),
+                    onGrantPermission = onRequestStoragePermission,
+                    onPickPdf = onPickPdfFromDevice,
+                    onPickFolder = onPickFolderFromDevice
+                )
+            }
             if (showContinueReading) {
                 ContinueReadingSection(
                     recentDocuments = recentDocuments,
@@ -323,6 +383,7 @@ private fun FilesListAndCarouselContent(
                 sortAscending = sortAscending,
                 isGridView = isGridView,
                 storageFilter = storageFilter,
+                availableVolumes = availableVolumes,
                 showSortMenu = showSortMenu,
                 onShowSortMenuChange = onShowSortMenuChange,
                 showFilterMenu = showFilterMenu,
@@ -333,7 +394,7 @@ private fun FilesListAndCarouselContent(
             )
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 92.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
@@ -349,8 +410,19 @@ private fun FilesListAndCarouselContent(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp)
+                contentPadding = PaddingValues(bottom = 92.dp)
             ) {
+                if (!hasStoragePermission && activeTab == BottomNavTab.FILES) {
+                    item(key = "storage_permission_card") {
+                        StoragePermissionOnboardingCard(
+                            compact = documents.isNotEmpty(),
+                            onGrantPermission = onRequestStoragePermission,
+                            onPickPdf = onPickPdfFromDevice,
+                            onPickFolder = onPickFolderFromDevice
+                        )
+                    }
+                }
+
                 if (showContinueReading) {
                     item(key = "continue_reading_header") {
                         ContinueReadingSection(
@@ -360,45 +432,35 @@ private fun FilesListAndCarouselContent(
                     }
                 }
 
-                item(key = "sort_filter_row") {
-                    SortAndFilterHeaderRow(
-                        sortField = sortField,
-                        sortAscending = sortAscending,
-                        isGridView = isGridView,
-                        storageFilter = storageFilter,
-                        showSortMenu = showSortMenu,
-                        onShowSortMenuChange = onShowSortMenuChange,
-                        showFilterMenu = showFilterMenu,
-                        onShowFilterMenuChange = onShowFilterMenuChange,
-                        onSortChange = onSortChange,
-                        onToggleGridView = onToggleGridView,
-                        onStorageFilterChange = onStorageFilterChange
-                    )
+                if (documents.isNotEmpty()) {
+                    item(key = "sort_filter_row") {
+                        SortAndFilterHeaderRow(
+                            sortField = sortField,
+                            sortAscending = sortAscending,
+                            isGridView = isGridView,
+                            storageFilter = storageFilter,
+                            availableVolumes = availableVolumes,
+                            showSortMenu = showSortMenu,
+                            onShowSortMenuChange = onShowSortMenuChange,
+                            showFilterMenu = showFilterMenu,
+                            onShowFilterMenuChange = onShowFilterMenuChange,
+                            onSortChange = onSortChange,
+                            onToggleGridView = onToggleGridView,
+                            onStorageFilterChange = onStorageFilterChange
+                        )
+                    }
                 }
 
-                if (documents.isEmpty()) {
+                if (documents.isEmpty() && !isScanning) {
                     item(key = "empty_state") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 64.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Description,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "No PDF documents match your filter",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        LibraryEmptyStateCard(
+                            activeTab = activeTab,
+                            hasStoragePermission = hasStoragePermission,
+                            onGrantPermission = onRequestStoragePermission,
+                            onPickPdf = onPickPdfFromDevice,
+                            onPickFolder = onPickFolderFromDevice,
+                            onRescan = onRescanStorage
+                        )
                     }
                 } else {
                     items(documents, key = { it.id }) { doc ->
@@ -408,6 +470,161 @@ private fun FilesListAndCarouselContent(
                             onMoreClick = { onOpenDocumentMenu(doc) }
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StoragePermissionOnboardingCard(
+    compact: Boolean,
+    onGrantPermission: () -> Unit,
+    onPickPdf: () -> Unit,
+    onPickFolder: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("storage_permission_onboarding_card")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = OrionIcons.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Access PDFs on Your Phone",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = if (compact) {
+                    "Allow All Files Access to automatically index PDFs across Download, Documents, WhatsApp, and SD card folders."
+                } else {
+                    "Grant storage permission to automatically scan all PDFs on your phone, or pick individual files and folders directly from your File Manager."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Button(
+                    onClick = onGrantPermission,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("grant_storage_permission_button")
+                ) {
+                    Text("Allow Access", maxLines = 1)
+                }
+                FilledTonalButton(
+                    onClick = onPickFolder,
+                    modifier = Modifier.testTag("pick_saf_folder_button")
+                ) {
+                    Text("Add Folder", maxLines = 1)
+                }
+            }
+            if (!compact) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onPickPdf,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("onboarding_pick_pdf_button")
+                ) {
+                    Icon(OrionIcons.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Open PDF from File Manager")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryEmptyStateCard(
+    activeTab: BottomNavTab,
+    hasStoragePermission: Boolean,
+    onGrantPermission: () -> Unit,
+    onPickPdf: () -> Unit,
+    onPickFolder: () -> Unit,
+    onRescan: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 28.dp, vertical = 48.dp)
+    ) {
+        Icon(
+            imageVector = when (activeTab) {
+                BottomNavTab.RECENT -> OrionIcons.History
+                BottomNavTab.FAVORITES -> OrionIcons.StarBorder
+                else -> OrionIcons.DescriptionOutlined
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(52.dp)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = when (activeTab) {
+                BottomNavTab.RECENT -> "No recently opened PDFs"
+                BottomNavTab.FAVORITES -> "No favorite PDFs yet"
+                else -> if (hasStoragePermission) "No PDF files found on device" else "Your PDF library is ready"
+            },
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = when (activeTab) {
+                BottomNavTab.RECENT -> "Documents you open from your phone or File Manager will appear here with reading progress."
+                BottomNavTab.FAVORITES -> "Tap the three-dot menu on any PDF and choose Add to Favorites."
+                else -> if (hasStoragePermission) {
+                    "Tap Rescan Storage or pick any PDF from your File Manager to start reading and annotating."
+                } else {
+                    "Grant storage permission above to auto-scan your phone, or tap Open PDF below."
+                }
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(18.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (hasStoragePermission) {
+                FilledTonalButton(onClick = onRescan) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Rescan")
+                }
+            } else {
+                Button(onClick = onGrantPermission) {
+                    Text("Scan Phone")
+                }
+            }
+            OutlinedButton(onClick = onPickPdf) {
+                Text("Open PDF")
+            }
+            if (activeTab == BottomNavTab.FILES) {
+                OutlinedButton(onClick = onPickFolder) {
+                    Text("Folder")
                 }
             }
         }
@@ -522,6 +739,7 @@ private fun SortAndFilterHeaderRow(
     sortAscending: Boolean,
     isGridView: Boolean,
     storageFilter: String?,
+    availableVolumes: List<String>,
     showSortMenu: Boolean,
     onShowSortMenuChange: (Boolean) -> Unit,
     showFilterMenu: Boolean,
@@ -546,7 +764,7 @@ private fun SortAndFilterHeaderRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Sort,
+                    imageVector = OrionIcons.Sort,
                     contentDescription = "Sort by",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -559,7 +777,7 @@ private fun SortAndFilterHeaderRow(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Icon(
-                    imageVector = if (sortAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                    imageVector = if (sortAscending) OrionIcons.ArrowUpward else OrionIcons.ArrowDownward,
                     contentDescription = if (sortAscending) "Ascending" else "Descending",
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(18.dp)
@@ -589,7 +807,7 @@ private fun SortAndFilterHeaderRow(
             modifier = Modifier.testTag("toggle_grid_view_button")
         ) {
             Icon(
-                imageVector = if (isGridView) Icons.Default.ViewList else Icons.Default.GridView,
+                imageVector = if (isGridView) OrionIcons.ViewList else OrionIcons.GridView,
                 contentDescription = "Toggle grid or list view",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -601,7 +819,7 @@ private fun SortAndFilterHeaderRow(
                 modifier = Modifier.testTag("storage_filter_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.Tune,
+                    imageVector = OrionIcons.Tune,
                     contentDescription = "Filter by storage",
                     tint = if (storageFilter != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -617,20 +835,16 @@ private fun SortAndFilterHeaderRow(
                         onShowFilterMenuChange(false)
                     }
                 )
-                DropdownMenuItem(
-                    text = { Text("Internal storage only") },
-                    onClick = {
-                        onStorageFilterChange("Internal storage")
-                        onShowFilterMenuChange(false)
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("SD Card (B437-1C18) only") },
-                    onClick = {
-                        onStorageFilterChange("B437-1C18")
-                        onShowFilterMenuChange(false)
-                    }
-                )
+                val volumes = availableVolumes.ifEmpty { listOf("Internal storage") }
+                volumes.forEach { volume ->
+                    DropdownMenuItem(
+                        text = { Text(volume) },
+                        onClick = {
+                            onStorageFilterChange(volume)
+                            onShowFilterMenuChange(false)
+                        }
+                    )
+                }
             }
         }
     }
@@ -755,14 +969,17 @@ private fun FoldersTabContent(
     foldersSegment: FoldersSegment,
     folderGroups: List<FolderGroupItem>,
     storageFilter: String?,
+    availableVolumes: List<String>,
+    hasStoragePermission: Boolean,
     onSelectSegment: (FoldersSegment) -> Unit,
     onOpenFolder: (FolderGroupItem) -> Unit,
-    onStorageFilterChange: (String?) -> Unit
+    onStorageFilterChange: (String?) -> Unit,
+    onRequestStoragePermission: () -> Unit,
+    onPickFolderFromDevice: () -> Unit
 ) {
     var showStorageMenu by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Segmented Folders | Authors switcher + filter button matching Screenshot 1
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -797,7 +1014,7 @@ private fun FoldersTabContent(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Outlined.Folder,
+                                imageVector = OrionIcons.FolderOutlined,
                                 contentDescription = null,
                                 tint = if (isFolders) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
@@ -851,7 +1068,7 @@ private fun FoldersTabContent(
                     modifier = Modifier.testTag("folders_filter_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Tune,
+                        imageVector = OrionIcons.Tune,
                         contentDescription = "Filter folders",
                         tint = if (storageFilter != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -867,20 +1084,16 @@ private fun FoldersTabContent(
                             showStorageMenu = false
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("Internal storage") },
-                        onClick = {
-                            onStorageFilterChange("Internal storage")
-                            showStorageMenu = false
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("SD Card (B437-1C18)") },
-                        onClick = {
-                            onStorageFilterChange("B437-1C18")
-                            showStorageMenu = false
-                        }
-                    )
+                    val volumes = availableVolumes.ifEmpty { listOf("Internal storage") }
+                    volumes.forEach { volume ->
+                        DropdownMenuItem(
+                            text = { Text(volume) },
+                            onClick = {
+                                onStorageFilterChange(volume)
+                                showStorageMenu = false
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -893,54 +1106,95 @@ private fun FoldersTabContent(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = 8.dp)
+            contentPadding = PaddingValues(top = 8.dp, bottom = 92.dp)
         ) {
-            items(displayedGroups, key = { it.name }) { group ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenFolder(group) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .testTag("folder_row_${group.name}"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        modifier = Modifier.size(52.dp)
+            if (displayedGroups.isEmpty()) {
+                item(key = "empty_folders") {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 28.dp, vertical = 48.dp)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = if (group.isAuthorGroup) Icons.Default.Person else Icons.Outlined.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
+                        Icon(
+                            imageVector = OrionIcons.FolderOutlined,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(52.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = group.name,
-                            style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
+                            text = "No PDF folders indexed yet",
+                            style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        val countLabel = if (group.pdfCount == 1) "1 PDF" else "${group.pdfCount} PDFs"
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "$countLabel · ${group.storageVolume}",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "Add a folder from your phone storage or allow All Files Access to discover Download, Documents, and SD card folders automatically.",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (!hasStoragePermission) {
+                                Button(onClick = onRequestStoragePermission) {
+                                    Text("Allow Access")
+                                }
+                            }
+                            FilledTonalButton(onClick = onPickFolderFromDevice) {
+                                Text("Add Folder")
+                            }
+                        }
                     }
+                }
+            } else {
+                items(displayedGroups, key = { it.name }) { group ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenFolder(group) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("folder_row_${group.name}"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.size(52.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (group.isAuthorGroup) Icons.Default.Person else OrionIcons.FolderOutlined,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
 
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open ${group.name}",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = group.name,
+                                style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            val countLabel = if (group.pdfCount == 1) "1 PDF" else "${group.pdfCount} PDFs"
+                            Text(
+                                text = "$countLabel · ${group.storageVolume}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open ${group.name}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -968,10 +1222,10 @@ private fun OrionBottomNavigationBar(
             BottomNavTab.entries.forEach { tab ->
                 val selected = activeTab == tab
                 val icon = when (tab) {
-                    BottomNavTab.FILES -> if (selected) Icons.Default.Description else Icons.Outlined.Description
-                    BottomNavTab.RECENT -> if (selected) Icons.Default.History else Icons.Outlined.History
-                    BottomNavTab.FAVORITES -> if (selected) Icons.Default.Star else Icons.Default.StarBorder
-                    BottomNavTab.FOLDERS -> if (selected) Icons.Default.Folder else Icons.Outlined.Folder
+                    BottomNavTab.FILES -> if (selected) OrionIcons.Description else OrionIcons.DescriptionOutlined
+                    BottomNavTab.RECENT -> OrionIcons.History
+                    BottomNavTab.FAVORITES -> if (selected) Icons.Default.Star else OrionIcons.StarBorder
+                    BottomNavTab.FOLDERS -> if (selected) OrionIcons.Folder else OrionIcons.FolderOutlined
                 }
 
                 Column(

@@ -2,9 +2,13 @@ package com.example
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -21,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,6 +38,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppDatabase
@@ -41,6 +49,7 @@ import com.example.data.PdfRepository
 import com.example.ui.AppSettingsAndSideloadDialog
 import com.example.ui.ContentsBookmarksQuotesSheet
 import com.example.ui.CreateOrMoveFolderDialog
+import com.example.ui.DeleteDocumentConfirmDialog
 import com.example.ui.DocumentActionBottomSheet
 import com.example.ui.FileInfoDialog
 import com.example.ui.HomeMoreBottomSheet
@@ -51,11 +60,16 @@ import com.example.ui.ReadingSettingsBottomSheet
 import com.example.ui.theme.OrionPdfTheme
 import com.example.viewmodel.PdfAppViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+
+    private val incomingIntentFlow = MutableStateFlow<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        incomingIntentFlow.value = intent
 
         val database = AppDatabase.getInstance(applicationContext)
         val repository = PdfRepository(database.pdfDao())
@@ -64,24 +78,62 @@ class MainActivity : ComponentActivity() {
             val appViewModel: PdfAppViewModel = viewModel(
                 factory = PdfAppViewModel.Factory(applicationContext, repository)
             )
+            val pendingIntent by incomingIntentFlow.collectAsStateWithLifecycle()
 
-            // Handle external PDF VIEW intent if launched from file manager
-            LaunchedEffect(intent) {
-                if (intent?.action == Intent.ACTION_VIEW) {
-                    intent.data?.let { uri ->
-                        appViewModel.importPdfFromUri(applicationContext, uri, openImmediately = true)
-                    }
-                }
+            LaunchedEffect(pendingIntent) {
+                val activeIntent = pendingIntent ?: return@LaunchedEffect
+                handleIncomingIntent(activeIntent, appViewModel)
+                incomingIntentFlow.value = null
             }
 
-            OrionPdfRootApp(viewModel = appViewModel)
+            OrionPdfRootApp(
+                activity = this,
+                viewModel = appViewModel
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingIntentFlow.value = intent
+    }
+
+    private fun handleIncomingIntent(intent: Intent, viewModel: PdfAppViewModel) {
+        val pinnedDocId = intent.getLongExtra("pinned_doc_id", -1L)
+        if (pinnedDocId > 0L) {
+            viewModel.openDocumentById(pinnedDocId)
+            return
+        }
+
+        when (intent.action) {
+            Intent.ACTION_VIEW -> {
+                intent.data?.let { uri ->
+                    viewModel.importPdfFromUri(applicationContext, uri, openImmediately = true)
+                }
+            }
+            Intent.ACTION_SEND -> {
+                val streamUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                streamUri?.let { uri ->
+                    viewModel.importPdfFromUri(applicationContext, uri, openImmediately = true)
+                }
+            }
         }
     }
 }
 
 @Composable
-fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
+fun OrionPdfRootApp(
+    activity: ComponentActivity,
+    viewModel: PdfAppViewModel
+) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val libraryState by viewModel.libraryState.collectAsStateWithLifecycle()
     val settingsState by viewModel.readerSettings.collectAsStateWithLifecycle()
     val readerState by viewModel.activeReader.collectAsStateWithLifecycle()
@@ -89,6 +141,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
     val recentDocuments by viewModel.recentDocuments.collectAsStateWithLifecycle()
     val filteredDocuments by viewModel.filteredDocuments.collectAsStateWithLifecycle()
     val folderGroups by viewModel.folderGroups.collectAsStateWithLifecycle()
+    val availableVolumes by viewModel.availableVolumes.collectAsStateWithLifecycle()
 
     val activeDocBookmarks by viewModel.activeDocumentBookmarks.collectAsStateWithLifecycle()
     val activeDocQuotes by viewModel.activeDocumentQuotes.collectAsStateWithLifecycle()
@@ -103,17 +156,87 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
     var documentForActionSheet by remember { mutableStateOf<PdfDocumentEntity?>(null) }
     var documentForFileInfo by remember { mutableStateOf<PdfDocumentEntity?>(null) }
     var documentForContentsSheet by remember { mutableStateOf<PdfDocumentEntity?>(null) }
+    var documentToDelete by remember { mutableStateOf<PdfDocumentEntity?>(null) }
+    var pendingExportDoc by remember { mutableStateOf<PdfDocumentEntity?>(null) }
     var contentsInitialTab by remember { mutableIntStateOf(0) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var documentToMoveFolder by remember { mutableStateOf<PdfDocumentEntity?>(null) }
     var pendingNotificationDoc by remember { mutableStateOf<PdfDocumentEntity?>(null) }
+    var awaitingPermissionReturn by remember { mutableStateOf(false) }
 
-    // System PDF Picker (Storage Access Framework)
+    // Apply real window brightness while reading
+    LaunchedEffect(readerState.document != null, settingsState.useSystemBrightness, settingsState.brightness) {
+        val params = activity.window.attributes
+        params.screenBrightness = if (readerState.document != null && !settingsState.useSystemBrightness) {
+            settingsState.brightness.coerceIn(0.1f, 1.0f)
+        } else {
+            WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+        activity.window.attributes = params
+    }
+
+    // Apply orientation lock toggle when active in Reader
+    LaunchedEffect(readerState.document != null, readerState.isLandscapeLocked) {
+        activity.requestedOrientation = if (readerState.document != null && readerState.isLandscapeLocked) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Auto-refresh permission status and rescan whenever user returns from Android All Files Access Settings
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshPermissionStatus()
+                if (awaitingPermissionReturn) {
+                    awaitingPermissionReturn = false
+                    viewModel.refreshPermissionAndScan(showToastWhenDone = true)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // System PDF File Picker (Storage Access Framework)
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             viewModel.importPdfFromUri(context, uri, openImmediately = true)
+        }
+    }
+
+    // System Folder Tree Picker (Storage Access Framework)
+    val folderTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            viewModel.addSafFolderTree(context, treeUri)
+        }
+    }
+
+    // System Save As Picker for Exporting Annotated PDF copies
+    val exportPdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf")
+    ) { destUri ->
+        val doc = pendingExportDoc
+        pendingExportDoc = null
+        if (doc != null && destUri != null) {
+            viewModel.exportAnnotatedPdf(context, doc, destinationUri = destUri)
+        }
+    }
+
+    // Legacy Storage Permission Launcher (Android 10 and below)
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val granted = grants.values.any { it }
+        if (granted) {
+            viewModel.refreshPermissionAndScan(showToastWhenDone = true)
+        } else {
+            viewModel.showStatusMessage("Storage permission denied • You can still open PDFs via File Manager")
         }
     }
 
@@ -127,10 +250,48 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
         }
     }
 
+    val requestStoragePermissionAction: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            awaitingPermissionReturn = true
+            try {
+                val manageIntent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(manageIntent)
+            } catch (_: Exception) {
+                runCatching {
+                    context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }.onFailure {
+                    awaitingPermissionReturn = false
+                    viewModel.showStatusMessage("Open Android Settings → Apps → Orion PDF Reader → Permissions")
+                }
+            }
+        } else {
+            val perms = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            legacyStoragePermissionLauncher.launch(perms)
+        }
+    }
+
+    val triggerExportAnnotatedPdf: (PdfDocumentEntity) -> Unit = { doc ->
+        pendingExportDoc = doc
+        val suggestedName = "${doc.title.replace(Regex("[^a-zA-Z0-9._ -]"), "_")}_annotated.pdf"
+        runCatching {
+            exportPdfLauncher.launch(suggestedName)
+        }.onFailure {
+            pendingExportDoc = null
+            viewModel.exportAnnotatedPdf(context, doc, destinationUri = null)
+        }
+    }
+
     // Auto-dismiss status toast
     LaunchedEffect(libraryState.statusMessage) {
         if (libraryState.statusMessage != null) {
-            delay(2600L)
+            delay(2800L)
             viewModel.showStatusMessage(null)
         }
     }
@@ -149,6 +310,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                 }
 
                 readerState.document != null -> {
+                    val activeDoc = readerState.document!!
                     ReaderScreen(
                         readerState = readerState,
                         settingsState = settingsState,
@@ -166,6 +328,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                         onSelectAnnotationColor = { viewModel.selectAnnotationColor(it) },
                         onAddStrokeAnnotation = { page, pts -> viewModel.addStrokeAnnotation(page, pts) },
                         onAddStickyNote = { page, nx, ny, note -> viewModel.addStickyNoteAnnotation(page, nx, ny, note) },
+                        onHighlightSelection = { page, rects -> viewModel.addHighlightRectsAnnotation(page, rects) },
                         onDeleteAnnotation = { viewModel.deleteAnnotation(it) },
                         onUndoAnnotation = { viewModel.undoLastAnnotation() },
                         onRedoAnnotation = { viewModel.redoLastAnnotation() },
@@ -173,7 +336,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                         onSaveQuote = { quote, note, page -> viewModel.saveQuote(quote, note, page) },
                         onOpenContentsSheet = {
                             contentsInitialTab = 0
-                            documentForContentsSheet = readerState.document
+                            documentForContentsSheet = activeDoc
                         },
                         onOpenReadingSettingsSheet = { showReadingSettingsSheet = true },
                         onOpenDocumentMoreSheet = { documentForActionSheet = it },
@@ -183,7 +346,9 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                         onStopAutoScroll = { viewModel.setAutoScroll(false) },
                         onAdjustAutoScrollSpeed = { viewModel.adjustAutoScrollSpeed(it) },
                         onStopReadAloud = { viewModel.setReadAloud(false) },
-                        onAdjustReadAloudSpeed = { viewModel.adjustReadAloudSpeed(it) }
+                        onAdjustReadAloudSpeed = { viewModel.adjustReadAloudSpeed(it) },
+                        onExportAnnotatedPdf = { triggerExportAnnotatedPdf(activeDoc) },
+                        onStatusMessage = { viewModel.showStatusMessage(it) }
                     )
                 }
 
@@ -193,6 +358,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                         recentDocuments = recentDocuments,
                         filteredDocuments = filteredDocuments,
                         folderGroups = folderGroups,
+                        availableVolumes = availableVolumes,
                         onSelectTab = { viewModel.selectTab(it) },
                         onSelectFoldersSegment = { viewModel.selectFoldersSegment(it) },
                         onOpenFolderGroup = { viewModel.openFolderGroup(it) },
@@ -204,21 +370,26 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                         onOpenDocument = { viewModel.openDocument(it) },
                         onOpenDocumentMenu = { documentForActionSheet = it },
                         onOpenAppMoreSheet = { showHomeMoreSheet = true },
-                        onOpenCreateFolderDialog = { showCreateFolderDialog = true }
+                        onOpenCreateFolderDialog = { showCreateFolderDialog = true },
+                        onRequestStoragePermission = requestStoragePermissionAction,
+                        onPickPdfFromDevice = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                        onPickFolderFromDevice = { folderTreeLauncher.launch(null) },
+                        onRescanStorage = { viewModel.rescanStorage() }
                     )
                 }
             }
 
-            // Home More Menu Sheet (Screenshot 5)
+            // Home More Menu Sheet
             if (showHomeMoreSheet) {
                 HomeMoreBottomSheet(
                     appThemeMode = settingsState.appThemeMode,
+                    hasStoragePermission = libraryState.hasStoragePermission,
                     onDismiss = { showHomeMoreSheet = false },
                     onOpenProVersionScreen = { showProVersionScreen = true },
                     onSelectAppTheme = { viewModel.setAppThemeMode(it) },
-                    onPickPdfFromDevice = {
-                        pdfPickerLauncher.launch(arrayOf("application/pdf"))
-                    },
+                    onPickPdfFromDevice = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                    onPickFolderFromDevice = { folderTreeLauncher.launch(null) },
+                    onManageStoragePermission = requestStoragePermissionAction,
                     onRescanStorage = { viewModel.rescanStorage() },
                     onOpenSettingsDialog = { showAppSettingsDialog = true },
                     onLeaveRating = { viewModel.showStatusMessage("Thank you for rating Orion PDF Reader 5 ★!") },
@@ -226,7 +397,7 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                 )
             }
 
-            // Reading Settings Bottom Sheet (Screenshot 3)
+            // Reading Settings Bottom Sheet
             if (showReadingSettingsSheet) {
                 ReadingSettingsBottomSheet(
                     settings = settingsState,
@@ -234,13 +405,13 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                     onBrightnessChange = { viewModel.setBrightness(it) },
                     onUseSystemBrightnessChange = { viewModel.setUseSystemBrightness(it) },
                     onSelectReadingTheme = { viewModel.setReadingTheme(it) },
-                    onVerticalScrollChange = { viewModel.setVerticalScroll(it) },
-                    onSwipeByPageChange = { viewModel.setSwipeByPage(it) },
+                    onHorizontalScrollChange = { viewModel.setHorizontalScroll(it) },
+                    onBookModeChange = { viewModel.setBookMode(it) },
                     onShowScrollBarChange = { viewModel.setShowScrollBar(it) }
                 )
             }
 
-            // Document Action Bottom Sheet (Screenshot 6)
+            // Document Action Bottom Sheet
             documentForActionSheet?.let { doc ->
                 DocumentActionBottomSheet(
                     doc = doc,
@@ -249,6 +420,8 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                     onOpenWith = { viewModel.openDocumentWithExternalApp(context, doc) },
                     onPrint = { viewModel.printDocument(context, doc) },
                     onShowFileInfo = { documentForFileInfo = doc },
+                    onToggleFavorite = { viewModel.toggleFavorite(doc) },
+                    onExportAnnotatedPdf = { triggerExportAnnotatedPdf(doc) },
                     onStartReadAloud = {
                         if (readerState.document?.id != doc.id) {
                             viewModel.openDocument(doc)
@@ -281,7 +454,17 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                     },
                     onShowInFolder = { viewModel.showDocumentInFolder(doc) },
                     onMoveToFolder = { documentToMoveFolder = doc },
-                    onDelete = { viewModel.deleteDocument(doc) }
+                    onDelete = { documentToDelete = doc }
+                )
+            }
+
+            // Delete Confirmation Dialog (Remove from library vs Delete from phone storage)
+            documentToDelete?.let { doc ->
+                DeleteDocumentConfirmDialog(
+                    doc = doc,
+                    onRemoveFromLibrary = { viewModel.deleteDocument(context, doc, deleteFromStorage = false) },
+                    onDeleteFromDevice = { viewModel.deleteDocument(context, doc, deleteFromStorage = true) },
+                    onDismiss = { documentToDelete = null }
                 )
             }
 
@@ -319,13 +502,16 @@ fun OrionPdfRootApp(viewModel: PdfAppViewModel) {
                 )
             }
 
-            // App Settings & APK Sideload Guide Dialog
+            // App Settings Dialog
             if (showAppSettingsDialog) {
                 AppSettingsAndSideloadDialog(
                     settings = settingsState,
+                    hasStoragePermission = libraryState.hasStoragePermission,
                     onAutoResumeChange = { viewModel.setAutoResumeLastPdf(it) },
-                    onVerticalScrollChange = { viewModel.setVerticalScroll(it) },
+                    onHorizontalScrollChange = { viewModel.setHorizontalScroll(it) },
                     onShowScrollBarChange = { viewModel.setShowScrollBar(it) },
+                    onAutoScanOnLaunchChange = { viewModel.setAutoScanStorageOnLaunch(it) },
+                    onManageStoragePermission = requestStoragePermissionAction,
                     onDismiss = { showAppSettingsDialog = false }
                 )
             }

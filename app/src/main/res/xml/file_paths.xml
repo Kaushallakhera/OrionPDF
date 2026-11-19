@@ -2,4 +2,8 @@
 <paths>
     <files-path name="internal_pdfs" path="." />
     <cache-path name="cached_pdfs" path="." />
+    <external-path name="external_storage" path="." />
+    <external-files-path name="external_app_files" path="." />
+    <external-cache-path name="external_cache" path="." />
+    <root-path name="root_storage" path="." />
 </paths>

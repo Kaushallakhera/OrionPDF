@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
@@ -24,11 +25,14 @@ import com.example.data.ReadingTheme
 import com.example.data.encodeAnnotationPoints
 import com.example.data.progressFraction
 import com.example.data.progressPercent
-import com.example.pdf.BundledPdfSeeder
+import com.example.pdf.DevicePdfScanner
+import com.example.pdf.NormalizedRect
 import com.example.pdf.PdfRenderEngine
+import com.example.pdf.PdfTextExtractor
 import com.example.ui.theme.AppThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -72,7 +76,8 @@ data class FolderGroupItem(
 data class PdfSearchMatch(
     val pageIndex: Int,
     val snippet: String,
-    val matchCountOnPage: Int
+    val rects: List<NormalizedRect> = emptyList(),
+    val matchCountOnPage: Int = 1
 )
 
 data class LibraryUiState(
@@ -84,33 +89,25 @@ data class LibraryUiState(
     val sortField: SortField = SortField.NAME,
     val sortAscending: Boolean = true,
     val isGridView: Boolean = false,
-    val storageFilter: String? = null, // null = All, "Internal storage", "B437-1C18"
-    val customFolders: List<String> = listOf(
-        ".Alarms",
-        ".Chats",
-        ".DPP Class 10",
-        ".Kaushal Document",
-        ".Lokesh Documents",
-        ".Mummy Document",
-        ".other",
-        ".Payal Document",
-        "Download",
-        "Print",
-        "Study Notes",
-        "Telegram Videos"
-    ),
+    val storageFilter: String? = null,
+    val hasStoragePermission: Boolean = false,
+    val isScanning: Boolean = false,
+    val scannedCount: Int = 0,
+    val persistedTreeCount: Int = 0,
+    val customFolders: List<String> = emptyList(),
     val statusMessage: String? = null
 )
 
 data class ReaderSettingsState(
     val appThemeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val readingTheme: ReadingTheme = ReadingTheme.LIGHT,
-    val brightness: Float = 0.68f,
+    val brightness: Float = 0.78f,
     val useSystemBrightness: Boolean = true,
-    val verticalScroll: Boolean = true,
-    val swipeByPage: Boolean = false,
+    val horizontalScroll: Boolean = false,
+    val bookMode: Boolean = false,
     val showScrollBar: Boolean = true,
-    val autoResumeLastPdf: Boolean = false
+    val autoResumeLastPdf: Boolean = false,
+    val autoScanStorageOnLaunch: Boolean = false
 )
 
 data class ActiveReaderState(
@@ -121,7 +118,7 @@ data class ActiveReaderState(
     val isLandscapeLocked: Boolean = false,
     val isReflowMode: Boolean = false,
     val reflowFontSizeSp: Float = 18f,
-    val isAnnotationSidebarExpanded: Boolean = true,
+    val isAnnotationSidebarExpanded: Boolean = false,
     val activeTool: AnnotationTool = AnnotationTool.NONE,
     val activeColorHex: Long = 0xFFE53935L,
     val activeStrokeWidth: Float = 5f,
@@ -129,10 +126,12 @@ data class ActiveReaderState(
     val pdfSearchQuery: String = "",
     val pdfSearchMatches: List<PdfSearchMatch> = emptyList(),
     val activeSearchMatchIndex: Int = 0,
+    val isSearchingPdf: Boolean = false,
     val isAutoScrollActive: Boolean = false,
     val autoScrollSpeed: Float = 1.0f,
     val isReadAloudActive: Boolean = false,
-    val readAloudSpeed: Float = 1.0f
+    val readAloudSpeed: Float = 1.0f,
+    val isExportingAnnotatedPdf: Boolean = false
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -142,8 +141,16 @@ class PdfAppViewModel(
 ) : ViewModel() {
 
     private val prefs = appContext.getSharedPreferences("orion_reader_prefs", Context.MODE_PRIVATE)
+    private var scanJob: Job? = null
+    private var pdfSearchJob: Job? = null
 
-    private val _libraryState = MutableStateFlow(LibraryUiState())
+    private val _libraryState = MutableStateFlow(
+        LibraryUiState(
+            hasStoragePermission = DevicePdfScanner.hasAllFilesPermission(appContext),
+            persistedTreeCount = getPersistedTreeUris().size,
+            customFolders = getSavedCustomFolders()
+        )
+    )
     val libraryState: StateFlow<LibraryUiState> = _libraryState.asStateFlow()
 
     private val _readerSettings = MutableStateFlow(loadInitialSettings())
@@ -168,6 +175,12 @@ class PdfAppViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allQuotes: StateFlow<List<QuoteEntity>> = repository.allQuotes
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableVolumes: StateFlow<List<String>> = allDocuments
+        .combine(_libraryState) { docs, _ ->
+            docs.map { it.storageVolume }.distinct().sorted()
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val activeDocumentBookmarks: StateFlow<List<BookmarkEntity>> = _activeReader
@@ -244,8 +257,14 @@ class PdfAppViewModel(
         allDocuments,
         _libraryState
     ) { all, lib ->
+        val volumeFiltered = if (lib.storageFilter != null) {
+            all.filter { it.storageVolume.equals(lib.storageFilter, ignoreCase = true) }
+        } else {
+            all
+        }
+
         if (lib.foldersSegment == FoldersSegment.AUTHORS) {
-            all.groupBy { it.author }
+            volumeFiltered.groupBy { it.author }
                 .map { (author, docs) ->
                     FolderGroupItem(
                         name = author,
@@ -256,48 +275,201 @@ class PdfAppViewModel(
                 }
                 .sortedBy { it.name.lowercase() }
         } else {
-            // Match the exact folder list seen in Screenshot 1 plus any active folders
-            val screenshotDefaultCounts = mapOf(
-                ".Alarms" to (1 to "B437-1C18"),
-                ".Chats" to (4 to "B437-1C18"),
-                ".DPP Class 10" to (3 to "Internal storage"),
-                ".Kaushal Document" to (21 to "Internal storage"),
-                ".Lokesh Documents" to (7 to "Internal storage"),
-                ".Mummy Document" to (32 to "Internal storage"),
-                ".other" to (7 to "B437-1C18"),
-                ".Payal Document" to (13 to "Internal storage")
-            )
-            val allFolderNames = (lib.customFolders + all.map { it.folderName }).distinct()
-            allFolderNames.map { folderName ->
-                val matchingDocs = all.filter { it.folderName.equals(folderName, ignoreCase = true) }
-                val defaultMeta = screenshotDefaultCounts[folderName]
-                val count = if (defaultMeta != null) {
-                    maxOf(matchingDocs.size, defaultMeta.first)
-                } else {
-                    matchingDocs.size
-                }
-                val volume = matchingDocs.firstOrNull()?.storageVolume
-                    ?: defaultMeta?.second
-                    ?: "Internal storage"
+            val realFolderNames = (volumeFiltered.map { it.folderName } + lib.customFolders).distinct()
+            realFolderNames.mapNotNull { folderName ->
+                val matchingDocs = volumeFiltered.filter { it.folderName.equals(folderName, ignoreCase = true) }
+                val isUserCustom = lib.customFolders.any { it.equals(folderName, ignoreCase = true) }
+                if (matchingDocs.isEmpty() && !isUserCustom) return@mapNotNull null
                 FolderGroupItem(
                     name = folderName,
-                    pdfCount = count,
-                    storageVolume = volume,
+                    pdfCount = matchingDocs.size,
+                    storageVolume = matchingDocs.firstOrNull()?.storageVolume ?: "Internal storage",
                     isAuthorGroup = false
                 )
-            }.sortedWith(compareBy<FolderGroupItem> { !it.name.startsWith(".") }.thenBy { it.name.lowercase() })
+            }.sortedBy { it.name.lowercase() }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
-            BundledPdfSeeder.ensureSeeded(appContext, repository)
+            // Remove any leftover legacy bundled sample PDFs from earlier versions
+            purgeLegacySampleDocuments()
+            refreshPermissionStatus()
+            if (_readerSettings.value.autoScanStorageOnLaunch) {
+                refreshPermissionAndScan(showToastWhenDone = false)
+            }
             if (_readerSettings.value.autoResumeLastPdf) {
                 val lastId = prefs.getLong("last_opened_doc_id", -1L)
                 if (lastId > 0L) {
-                    repository.getDocumentById(lastId)?.let { openDocument(it) }
+                    repository.getDocumentById(lastId)?.let { doc ->
+                        if (isDocumentAccessible(doc.filePath)) {
+                            openDocument(doc)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private suspend fun purgeLegacySampleDocuments() = withContext(Dispatchers.IO) {
+        val sampleDir = File(appContext.filesDir, "sample_pdfs")
+        val existing = repository.getAllDocumentsOnce()
+        existing.forEach { doc ->
+            if (doc.filePath.contains("/sample_pdfs/")) {
+                repository.deleteDocument(doc.id)
+            }
+        }
+        if (sampleDir.exists()) {
+            runCatching { sampleDir.deleteRecursively() }
+        }
+    }
+
+    private fun isDocumentAccessible(pathOrUri: String): Boolean {
+        return try {
+            if (pathOrUri.startsWith("content://")) {
+                appContext.contentResolver.openFileDescriptor(Uri.parse(pathOrUri), "r")?.use { true } ?: false
+            } else {
+                val f = File(pathOrUri)
+                f.exists() && f.canRead() && f.length() > 0L
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun getPersistedTreeUris(): Set<String> {
+        return prefs.getStringSet("persisted_saf_tree_uris", emptySet())?.toSet() ?: emptySet()
+    }
+
+    private fun savePersistedTreeUris(uris: Set<String>) {
+        prefs.edit().putStringSet("persisted_saf_tree_uris", uris).apply()
+        _libraryState.update { it.copy(persistedTreeCount = uris.size) }
+    }
+
+    private fun getSavedCustomFolders(): List<String> {
+        return prefs.getStringSet("custom_folder_names", emptySet())?.sorted() ?: emptyList()
+    }
+
+    fun refreshPermissionStatus() {
+        val granted = DevicePdfScanner.hasAllFilesPermission(appContext)
+        _libraryState.update {
+            it.copy(
+                hasStoragePermission = granted,
+                persistedTreeCount = getPersistedTreeUris().size
+            )
+        }
+    }
+
+    fun refreshPermissionAndScan(showToastWhenDone: Boolean = true) {
+        val granted = DevicePdfScanner.hasAllFilesPermission(appContext)
+        val treeUris = getPersistedTreeUris()
+        _libraryState.update {
+            it.copy(
+                hasStoragePermission = granted,
+                persistedTreeCount = treeUris.size
+            )
+        }
+
+        if (scanJob?.isActive == true) return
+        scanJob = viewModelScope.launch {
+            _libraryState.update { it.copy(isScanning = true, scannedCount = 0) }
+            try {
+                val discovered = DevicePdfScanner.scanAllAccessiblePdfs(
+                    context = appContext,
+                    persistedTreeUris = treeUris,
+                    onProgressCount = { count ->
+                        _libraryState.update { it.copy(scannedCount = count) }
+                    }
+                )
+
+                val existingDocs = withContext(Dispatchers.IO) { repository.getAllDocumentsOnce() }
+                val existingByPath = existingDocs.associateBy { it.filePath }
+                val discoveredPaths = discovered.map { it.pathOrUri }.toHashSet()
+
+                var addedCount = 0
+                withContext(Dispatchers.IO) {
+                    for (item in discovered) {
+                        val existing = existingByPath[item.pathOrUri]
+                        if (existing == null) {
+                            repository.insertDocument(
+                                PdfDocumentEntity(
+                                    title = item.title,
+                                    filePath = item.pathOrUri,
+                                    folderName = item.folderName,
+                                    storageVolume = item.storageVolume,
+                                    author = item.folderName,
+                                    sizeBytes = item.sizeBytes,
+                                    pageCount = item.pageCount,
+                                    currentPage = 0,
+                                    lastOpenedAt = 0L,
+                                    createdAt = item.lastModified
+                                )
+                            )
+                            addedCount++
+                        } else if (existing.pageCount != item.pageCount || existing.sizeBytes != item.sizeBytes) {
+                            repository.updateDocument(
+                                existing.copy(
+                                    title = item.title,
+                                    sizeBytes = item.sizeBytes,
+                                    pageCount = item.pageCount,
+                                    createdAt = item.lastModified
+                                )
+                            )
+                        }
+                    }
+
+                    // Clean up entries whose backing files were deleted outside the app
+                    for (oldDoc in existingDocs) {
+                        if (!discoveredPaths.contains(oldDoc.filePath) && !isDocumentAccessible(oldDoc.filePath)) {
+                            repository.deleteDocument(oldDoc.id)
+                        }
+                    }
+                }
+
+                if (showToastWhenDone) {
+                    val total = repository.getDocumentCount()
+                    showStatusMessage(
+                        when {
+                            addedCount > 0 -> "Found $addedCount new PDF${if (addedCount == 1) "" else "s"} ($total total)"
+                            total > 0 -> "Storage rescanned • $total PDF${if (total == 1) "" else "s"} ready"
+                            else -> "No PDFs found yet • Grant storage access or pick a file"
+                        }
+                    )
+                }
+            } catch (_: Exception) {
+                if (showToastWhenDone) {
+                    showStatusMessage("Could not complete storage scan")
+                }
+            } finally {
+                _libraryState.update { it.copy(isScanning = false) }
+            }
+        }
+    }
+
+    fun addSafFolderTree(context: Context, treeUri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(treeUri, flags)
+            }.onFailure {
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
+
+            val updated = getPersistedTreeUris() + treeUri.toString()
+            savePersistedTreeUris(updated)
+            showStatusMessage("Folder added • Scanning for PDFs…")
+            refreshPermissionAndScan(showToastWhenDone = true)
+        }
+    }
+
+    fun openDocumentById(docId: Long) {
+        viewModelScope.launch {
+            repository.getDocumentById(docId)?.let { openDocument(it) }
         }
     }
 
@@ -307,21 +479,19 @@ class PdfAppViewModel(
         return ReaderSettingsState(
             appThemeMode = runCatching { AppThemeMode.valueOf(themeStr) }.getOrDefault(AppThemeMode.SYSTEM),
             readingTheme = runCatching { ReadingTheme.valueOf(readThemeStr) }.getOrDefault(ReadingTheme.LIGHT),
-            brightness = prefs.getFloat("brightness", 0.68f),
+            brightness = prefs.getFloat("brightness", 0.78f),
             useSystemBrightness = prefs.getBoolean("use_system_brightness", true),
-            verticalScroll = prefs.getBoolean("vertical_scroll", true),
-            swipeByPage = prefs.getBoolean("swipe_by_page", false),
+            horizontalScroll = prefs.getBoolean("horizontal_scroll", false),
+            bookMode = prefs.getBoolean("book_mode", false),
             showScrollBar = prefs.getBoolean("show_scroll_bar", true),
-            autoResumeLastPdf = prefs.getBoolean("auto_resume_last_pdf", false)
+            autoResumeLastPdf = prefs.getBoolean("auto_resume_last_pdf", false),
+            autoScanStorageOnLaunch = prefs.getBoolean("auto_scan_storage_on_launch", false)
         )
     }
 
     fun selectTab(tab: BottomNavTab) {
         _libraryState.update {
-            it.copy(
-                activeTab = tab,
-                selectedFolderName = null
-            )
+            it.copy(activeTab = tab, selectedFolderName = null)
         }
     }
 
@@ -386,8 +556,10 @@ class PdfAppViewModel(
             if (current.customFolders.any { it.equals(trimmed, ignoreCase = true) }) {
                 current.copy(statusMessage = "Folder '$trimmed' already exists")
             } else {
+                val updated = (current.customFolders + trimmed).sorted()
+                prefs.edit().putStringSet("custom_folder_names", updated.toSet()).apply()
                 current.copy(
-                    customFolders = current.customFolders + trimmed,
+                    customFolders = updated,
                     statusMessage = "Created folder '$trimmed'"
                 )
             }
@@ -407,10 +579,7 @@ class PdfAppViewModel(
     }
 
     fun rescanStorage() {
-        viewModelScope.launch {
-            BundledPdfSeeder.ensureSeeded(appContext, repository)
-            showStatusMessage("Storage rescanned • All PDFs up to date")
-        }
+        refreshPermissionAndScan(showToastWhenDone = true)
     }
 
     fun showStatusMessage(message: String?) {
@@ -439,14 +608,14 @@ class PdfAppViewModel(
         _readerSettings.update { it.copy(useSystemBrightness = useSystem) }
     }
 
-    fun setVerticalScroll(vertical: Boolean) {
-        prefs.edit().putBoolean("vertical_scroll", vertical).apply()
-        _readerSettings.update { it.copy(verticalScroll = vertical) }
+    fun setHorizontalScroll(horizontal: Boolean) {
+        prefs.edit().putBoolean("horizontal_scroll", horizontal).apply()
+        _readerSettings.update { it.copy(horizontalScroll = horizontal) }
     }
 
-    fun setSwipeByPage(swipe: Boolean) {
-        prefs.edit().putBoolean("swipe_by_page", swipe).apply()
-        _readerSettings.update { it.copy(swipeByPage = swipe) }
+    fun setBookMode(bookMode: Boolean) {
+        prefs.edit().putBoolean("book_mode", bookMode).apply()
+        _readerSettings.update { it.copy(bookMode = bookMode) }
     }
 
     fun setShowScrollBar(show: Boolean) {
@@ -457,6 +626,14 @@ class PdfAppViewModel(
     fun setAutoResumeLastPdf(autoResume: Boolean) {
         prefs.edit().putBoolean("auto_resume_last_pdf", autoResume).apply()
         _readerSettings.update { it.copy(autoResumeLastPdf = autoResume) }
+    }
+
+    fun setAutoScanStorageOnLaunch(enabled: Boolean) {
+        prefs.edit().putBoolean("auto_scan_storage_on_launch", enabled).apply()
+        _readerSettings.update { it.copy(autoScanStorageOnLaunch = enabled) }
+        if (enabled && _libraryState.value.hasStoragePermission) {
+            refreshPermissionAndScan(showToastWhenDone = true)
+        }
     }
 
     // Reader controls
@@ -470,7 +647,7 @@ class PdfAppViewModel(
             ActiveReaderState(
                 document = doc.copy(currentPage = targetPage, lastOpenedAt = System.currentTimeMillis()),
                 currentPage = targetPage,
-                isAnnotationSidebarExpanded = true
+                isAnnotationSidebarExpanded = false
             )
         }
         viewModelScope.launch {
@@ -479,6 +656,7 @@ class PdfAppViewModel(
     }
 
     fun closeDocument() {
+        pdfSearchJob?.cancel()
         _activeReader.update {
             it.copy(
                 document = null,
@@ -506,10 +684,7 @@ class PdfAppViewModel(
     }
 
     fun toggleScrollLock() {
-        _activeReader.update {
-            val next = !it.isScrollLocked
-            it.copy(isScrollLocked = next)
-        }
+        _activeReader.update { it.copy(isScrollLocked = !it.isScrollLocked) }
     }
 
     fun rotatePage90() {
@@ -537,8 +712,12 @@ class PdfAppViewModel(
     }
 
     fun toggleAnnotationSidebar() {
-        _activeReader.update {
-            it.copy(isAnnotationSidebarExpanded = !it.isAnnotationSidebarExpanded)
+        _activeReader.update { current ->
+            val nextExpanded = !current.isAnnotationSidebarExpanded
+            current.copy(
+                isAnnotationSidebarExpanded = nextExpanded,
+                activeTool = if (!nextExpanded) AnnotationTool.NONE else current.activeTool
+            )
         }
     }
 
@@ -566,7 +745,6 @@ class PdfAppViewModel(
         if (tool == AnnotationTool.NONE || tool == AnnotationTool.ERASER || normalizedPoints.size < 2) return
 
         val ptsToSave = if (tool == AnnotationTool.UNDERLINE) {
-            // Snap underline to a clean horizontal/straight line from start to end
             val start = normalizedPoints.first()
             val end = normalizedPoints.last()
             listOf(start, androidx.compose.ui.geometry.Offset(end.x, start.y))
@@ -589,6 +767,34 @@ class PdfAppViewModel(
             val id = repository.addAnnotation(entity)
             undoAnnotationIds.addLast(entity.copy(id = id))
             redoAnnotationStack.clear()
+        }
+    }
+
+    fun addHighlightRectsAnnotation(pageIndex: Int, rects: List<NormalizedRect>) {
+        val doc = _activeReader.value.document ?: return
+        if (rects.isEmpty()) return
+        viewModelScope.launch {
+            for (r in rects) {
+                val midY = ((r.top + r.bottom) * 0.5f).coerceIn(0.01f, 0.99f)
+                val pts = listOf(
+                    androidx.compose.ui.geometry.Offset(r.left.coerceIn(0.01f, 0.99f), midY),
+                    androidx.compose.ui.geometry.Offset(r.right.coerceIn(0.01f, 0.99f), midY)
+                )
+                val entity = AnnotationEntity(
+                    documentId = doc.id,
+                    pageIndex = pageIndex,
+                    toolType = AnnotationTool.HIGHLIGHTER.name,
+                    colorHex = 0xFFFDD835L,
+                    strokeWidth = 14f,
+                    pointsData = encodeAnnotationPoints(pts),
+                    anchorX = pts.first().x,
+                    anchorY = pts.first().y
+                )
+                val id = repository.addAnnotation(entity)
+                undoAnnotationIds.addLast(entity.copy(id = id))
+            }
+            redoAnnotationStack.clear()
+            showStatusMessage("Highlighted selection on Page ${pageIndex + 1}")
         }
     }
 
@@ -639,12 +845,54 @@ class PdfAppViewModel(
         }
     }
 
-    fun clearAnnotationsOnCurrentPage() {
-        val doc = _activeReader.value.document ?: return
-        val page = _activeReader.value.currentPage
+    // Export flattened Annotated PDF copy
+    fun exportAnnotatedPdf(
+        context: Context,
+        doc: PdfDocumentEntity,
+        destinationUri: Uri? = null
+    ) {
+        if (_activeReader.value.isExportingAnnotatedPdf) return
         viewModelScope.launch {
-            repository.clearPageAnnotations(doc.id, page)
-            showStatusMessage("Cleared annotations on Page ${page + 1}")
+            _activeReader.update { it.copy(isExportingAnnotatedPdf = true) }
+            showStatusMessage("Exporting annotated PDF…")
+            val annotations = withContext(Dispatchers.IO) {
+                repository.getAnnotationsForDocOnce(doc.id)
+            }
+            val result = PdfRenderEngine.exportAnnotatedPdf(
+                context = context,
+                sourcePathOrUri = doc.filePath,
+                docTitle = doc.title,
+                annotations = annotations,
+                destinationUri = destinationUri
+            )
+            _activeReader.update { it.copy(isExportingAnnotatedPdf = false) }
+            result.onSuccess { savedLocation ->
+                if (!savedLocation.startsWith("content://")) {
+                    val savedFile = File(savedLocation)
+                    if (savedFile.exists()) {
+                        val pages = PdfRenderEngine.inspectPdfPageCount(context, savedFile.absolutePath).coerceAtLeast(1)
+                        repository.insertDocument(
+                            PdfDocumentEntity(
+                                title = savedFile.nameWithoutExtension,
+                                filePath = savedFile.absolutePath,
+                                folderName = savedFile.parentFile?.name ?: "OrionPDF",
+                                storageVolume = "Internal storage",
+                                author = "Annotated Copy",
+                                sizeBytes = savedFile.length(),
+                                pageCount = pages,
+                                currentPage = 0,
+                                lastOpenedAt = System.currentTimeMillis(),
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                    showStatusMessage("Saved annotated copy: ${savedFile.name}")
+                } else {
+                    showStatusMessage("Annotated PDF exported successfully")
+                }
+            }.onFailure { err ->
+                showStatusMessage("Export failed: ${err.message ?: "Unable to write file"}")
+            }
         }
     }
 
@@ -720,58 +968,97 @@ class PdfAppViewModel(
         }
     }
 
-    fun deleteDocument(doc: PdfDocumentEntity) {
+    fun deleteDocument(context: Context, doc: PdfDocumentEntity, deleteFromStorage: Boolean) {
         viewModelScope.launch {
             if (_activeReader.value.document?.id == doc.id) {
                 closeDocument()
             }
+            PdfRenderEngine.closeRenderer(doc.filePath)
+
+            var diskDeleted = false
+            if (deleteFromStorage) {
+                diskDeleted = withContext(Dispatchers.IO) {
+                    try {
+                        if (doc.filePath.startsWith("content://")) {
+                            val uri = Uri.parse(doc.filePath)
+                            val deletedByDoc = runCatching {
+                                DocumentsContract.deleteDocument(context.contentResolver, uri)
+                            }.getOrDefault(false)
+                            if (deletedByDoc) true
+                            else context.contentResolver.delete(uri, null, null) > 0
+                        } else {
+                            val f = File(doc.filePath)
+                            !f.exists() || f.delete()
+                        }
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+            }
+
             repository.deleteDocument(doc.id)
-            showStatusMessage("Deleted '${doc.title}'")
+            showStatusMessage(
+                when {
+                    deleteFromStorage && diskDeleted -> "Deleted '${doc.title}' from device"
+                    deleteFromStorage -> "Removed from library (OS protected original file)"
+                    else -> "Removed '${doc.title}' from Orion library"
+                }
+            )
         }
     }
 
-    // In-PDF Unlimited Search
+    // Real In-PDF Text Search powered by PdfTextExtractor
     fun setPdfSearchOpen(open: Boolean) {
+        if (!open) pdfSearchJob?.cancel()
         _activeReader.update {
             it.copy(
                 isPdfSearchOpen = open,
                 pdfSearchQuery = if (!open) "" else it.pdfSearchQuery,
-                pdfSearchMatches = if (!open) emptyList() else it.pdfSearchMatches
+                pdfSearchMatches = if (!open) emptyList() else it.pdfSearchMatches,
+                isSearchingPdf = false
             )
         }
     }
 
     fun updatePdfSearchQuery(query: String) {
         val doc = _activeReader.value.document ?: return
+        _activeReader.update { it.copy(pdfSearchQuery = query) }
+        pdfSearchJob?.cancel()
+
         val trimmed = query.trim()
         if (trimmed.isEmpty()) {
             _activeReader.update {
-                it.copy(pdfSearchQuery = query, pdfSearchMatches = emptyList(), activeSearchMatchIndex = 0)
+                it.copy(pdfSearchMatches = emptyList(), activeSearchMatchIndex = 0, isSearchingPdf = false)
             }
             return
         }
 
-        val matches = mutableListOf<PdfSearchMatch>()
-        for (p in 0 until doc.pageCount) {
-            val pageText = BundledPdfSeeder.getExtractedPageText(doc.title, p, doc.pageCount)
-            val idx = pageText.indexOf(trimmed, ignoreCase = true)
-            if (idx >= 0) {
-                val count = Regex(Regex.escape(trimmed), RegexOption.IGNORE_CASE).findAll(pageText).count()
-                val start = (idx - 28).coerceAtLeast(0)
-                val end = (idx + trimmed.length + 46).coerceAtMost(pageText.length)
-                val snippet = pageText.substring(start, end).replace("\n", " ")
-                matches.add(PdfSearchMatch(pageIndex = p, snippet = "…$snippet…", matchCountOnPage = count))
+        pdfSearchJob = viewModelScope.launch {
+            _activeReader.update { it.copy(isSearchingPdf = true) }
+            val matches = withContext(Dispatchers.IO) {
+                PdfTextExtractor.searchDocumentWithBounds(
+                    context = appContext,
+                    filePathOrUri = doc.filePath,
+                    query = trimmed,
+                    expectedPageCount = doc.pageCount
+                ).map { hit ->
+                    PdfSearchMatch(
+                        pageIndex = hit.pageIndex,
+                        snippet = hit.snippet,
+                        rects = hit.rects,
+                        matchCountOnPage = 1
+                    )
+                }
             }
+            _activeReader.update {
+                it.copy(
+                    pdfSearchMatches = matches,
+                    activeSearchMatchIndex = 0,
+                    isSearchingPdf = false
+                )
+            }
+            matches.firstOrNull()?.let { onPageChanged(it.pageIndex) }
         }
-
-        _activeReader.update {
-            it.copy(
-                pdfSearchQuery = query,
-                pdfSearchMatches = matches,
-                activeSearchMatchIndex = 0
-            )
-        }
-        matches.firstOrNull()?.let { onPageChanged(it.pageIndex) }
     }
 
     fun navigatePdfSearchMatch(next: Boolean) {
@@ -804,13 +1091,50 @@ class PdfAppViewModel(
         }
     }
 
-    // System Integrations: SAF File Import, Share, Open With, Print, Pin Notification
+    // System Integrations: SAF File Import, File Manager ACTION_VIEW / ACTION_SEND, Share, Open With, Print, Pin Notification
     fun importPdfFromUri(context: Context, uri: Uri, openImmediately: Boolean = true) {
         viewModelScope.launch {
             val importedDoc = withContext(Dispatchers.IO) {
                 try {
+                    // Attempt persistable permission so we can read real device file directly
+                    val hasPersistable = runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                        true
+                    }.getOrDefault(false)
+
+                    // Direct file:// URI support
+                    if (uri.scheme.equals("file", ignoreCase = true)) {
+                        val directPath = uri.path
+                        if (!directPath.isNullOrBlank()) {
+                            val f = File(directPath)
+                            if (f.exists() && f.canRead()) {
+                                repository.getDocumentByPath(f.absolutePath)?.let { return@withContext it }
+                                val pages = PdfRenderEngine.inspectPdfPageCount(context, f.absolutePath)
+                                if (pages > 0) {
+                                    val entity = PdfDocumentEntity(
+                                        title = f.nameWithoutExtension,
+                                        filePath = f.absolutePath,
+                                        folderName = f.parentFile?.name ?: "Internal storage",
+                                        storageVolume = "Internal storage",
+                                        author = f.parentFile?.name ?: "Device Storage",
+                                        sizeBytes = f.length(),
+                                        pageCount = pages,
+                                        currentPage = 0,
+                                        lastOpenedAt = System.currentTimeMillis(),
+                                        createdAt = f.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
+                                    )
+                                    val id = repository.insertDocument(entity)
+                                    return@withContext entity.copy(id = id)
+                                }
+                            }
+                        }
+                    }
+
                     val resolver = context.contentResolver
-                    var displayName = "Imported_Document_${System.currentTimeMillis() % 10000}.pdf"
+                    var displayName = "Document_${System.currentTimeMillis() % 10000}.pdf"
                     var fileSize = 0L
                     resolver.query(uri, null, null, null, null)?.use { cursor ->
                         if (cursor.moveToFirst()) {
@@ -825,23 +1149,63 @@ class PdfAppViewModel(
                         }
                     }
 
+                    val uriStr = uri.toString()
+                    if (hasPersistable) {
+                        repository.getDocumentByPath(uriStr)?.let { return@withContext it }
+                        val directPages = PdfRenderEngine.inspectPdfPageCount(context, uriStr)
+                        if (directPages > 0) {
+                            val titleNoExt = displayName.removeSuffix(".pdf").removeSuffix(".PDF")
+                            val entity = PdfDocumentEntity(
+                                title = titleNoExt,
+                                filePath = uriStr,
+                                folderName = "Opened Files",
+                                storageVolume = "Internal storage",
+                                author = "Device Storage",
+                                sizeBytes = fileSize,
+                                pageCount = directPages,
+                                currentPage = 0,
+                                lastOpenedAt = System.currentTimeMillis(),
+                                createdAt = System.currentTimeMillis()
+                            )
+                            val newId = repository.insertDocument(entity)
+                            return@withContext entity.copy(id = newId)
+                        }
+                    }
+
+                    // For temporary one-time content:// URIs (e.g. from WhatsApp / Gmail / File Manager), cache locally
                     val importDir = File(context.filesDir, "imported_pdfs").apply { mkdirs() }
-                    val cleanName = displayName.replace(Regex("[^a-zA-Z0-9._ -]"), "_")
+                    val cleanName = displayName.replace(Regex("[^a-zA-Z0-9._ -]"), "_").let {
+                        if (it.endsWith(".pdf", ignoreCase = true)) it else "$it.pdf"
+                    }
                     val targetFile = File(importDir, cleanName)
                     resolver.openInputStream(uri)?.use { input ->
                         FileOutputStream(targetFile).use { output ->
                             input.copyTo(output)
                         }
-                    }
+                    } ?: return@withContext null
 
                     if (fileSize <= 0L) fileSize = targetFile.length()
-                    val pages = PdfRenderEngine.inspectPdfPageCount(targetFile).coerceAtLeast(1)
-                    val titleNoExt = displayName.removeSuffix(".pdf").removeSuffix(".PDF")
+                    val pages = PdfRenderEngine.inspectPdfPageCount(context, targetFile.absolutePath)
+                    if (pages <= 0) {
+                        targetFile.delete()
+                        return@withContext null
+                    }
 
+                    repository.getDocumentByPath(targetFile.absolutePath)?.let { existing ->
+                        val updated = existing.copy(
+                            sizeBytes = fileSize,
+                            pageCount = pages,
+                            lastOpenedAt = System.currentTimeMillis()
+                        )
+                        repository.updateDocument(updated)
+                        return@withContext updated
+                    }
+
+                    val titleNoExt = displayName.removeSuffix(".pdf").removeSuffix(".PDF")
                     val entity = PdfDocumentEntity(
                         title = titleNoExt,
                         filePath = targetFile.absolutePath,
-                        folderName = "Download",
+                        folderName = "Opened Files",
                         storageVolume = "Internal storage",
                         author = "Device Storage",
                         sizeBytes = fileSize,
@@ -852,58 +1216,92 @@ class PdfAppViewModel(
                     )
                     val newId = repository.insertDocument(entity)
                     entity.copy(id = newId)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
             }
 
             if (importedDoc != null) {
-                showStatusMessage("Imported '${importedDoc.title}' (${importedDoc.pageCount} pages)")
+                showStatusMessage("Opened '${importedDoc.title}' (${importedDoc.pageCount} pages)")
                 if (openImmediately) {
                     openDocument(importedDoc)
                 }
             } else {
-                showStatusMessage("Could not import selected PDF file")
+                showStatusMessage("Could not open selected PDF file")
             }
+        }
+    }
+
+    private fun resolveShareableUri(context: Context, doc: PdfDocumentEntity): Uri? {
+        return try {
+            if (doc.filePath.startsWith("content://")) {
+                // Copy to cache so external apps always receive reliable FileProvider read grants
+                val cacheDir = File(context.cacheDir, "shared_pdfs").apply { mkdirs() }
+                val safeName = doc.title.replace(Regex("[^a-zA-Z0-9._ -]"), "_").ifBlank { "document" } + ".pdf"
+                val outFile = File(cacheDir, safeName)
+                context.contentResolver.openInputStream(Uri.parse(doc.filePath))?.use { input ->
+                    FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                }
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", outFile)
+            } else {
+                val file = File(doc.filePath)
+                if (!file.exists()) return null
+                runCatching {
+                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                }.getOrElse {
+                    // Fallback to cache copy for unusual SD card mount paths
+                    val cacheDir = File(context.cacheDir, "shared_pdfs").apply { mkdirs() }
+                    val outFile = File(cacheDir, file.name)
+                    file.copyTo(outFile, overwrite = true)
+                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", outFile)
+                }
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 
     fun shareDocument(context: Context, doc: PdfDocumentEntity) {
-        try {
-            val file = File(doc.filePath)
-            if (!file.exists()) {
-                showStatusMessage("PDF file not found on disk")
-                return
+        viewModelScope.launch {
+            val uri = withContext(Dispatchers.IO) { resolveShareableUri(context, doc) }
+            if (uri == null) {
+                showStatusMessage("PDF file not accessible for sharing")
+                return@launch
             }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/pdf"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, doc.title)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            try {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, doc.title)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(
+                    Intent.createChooser(shareIntent, "Share ${doc.title}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (_: Exception) {
+                showStatusMessage("Unable to launch share sheet")
             }
-            context.startActivity(
-                Intent.createChooser(shareIntent, "Share ${doc.title}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (e: Exception) {
-            showStatusMessage("Unable to launch share sheet")
         }
     }
 
     fun openDocumentWithExternalApp(context: Context, doc: PdfDocumentEntity) {
-        try {
-            val file = File(doc.filePath)
-            if (!file.exists()) return
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/pdf")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        viewModelScope.launch {
+            val uri = withContext(Dispatchers.IO) { resolveShareableUri(context, doc) }
+            if (uri == null) {
+                showStatusMessage("PDF file not accessible")
+                return@launch
             }
-            context.startActivity(
-                Intent.createChooser(viewIntent, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (e: Exception) {
-            showStatusMessage("No external PDF app found")
+            try {
+                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/pdf")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(
+                    Intent.createChooser(viewIntent, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (_: Exception) {
+                showStatusMessage("No external PDF app found")
+            }
         }
     }
 
@@ -951,8 +1349,8 @@ class PdfAppViewModel(
                 repository.updatePinnedNotification(doc.id, true)
                 showStatusMessage("Pinned '${doc.title}' to notifications")
             }
-        } catch (e: Exception) {
-            showStatusMessage("Pinned reading shortcut activated for '${doc.title}'")
+        } catch (_: Exception) {
+            showStatusMessage("Notification permission needed to pin shortcut")
         }
     }
 

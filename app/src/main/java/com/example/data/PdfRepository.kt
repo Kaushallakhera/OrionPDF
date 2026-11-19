@@ -13,8 +13,11 @@ class PdfRepository(private val dao: PdfDao) {
     fun observeQuotesForDoc(docId: Long): Flow<List<QuoteEntity>> = dao.observeQuotesForDoc(docId)
     fun observeAnnotationsForDoc(docId: Long): Flow<List<AnnotationEntity>> = dao.observeAnnotationsForDoc(docId)
 
+    suspend fun getAllDocumentsOnce(): List<PdfDocumentEntity> = dao.getAllDocumentsOnce()
     suspend fun getDocumentCount(): Int = dao.getDocumentCount()
     suspend fun getDocumentById(id: Long): PdfDocumentEntity? = dao.getDocumentById(id)
+    suspend fun getDocumentByPath(filePath: String): PdfDocumentEntity? = dao.getDocumentByPath(filePath)
+    suspend fun getAnnotationsForDocOnce(docId: Long): List<AnnotationEntity> = dao.getAnnotationsForDocOnce(docId)
 
     suspend fun insertDocument(doc: PdfDocumentEntity): Long = dao.insertDocument(doc)
     suspend fun insertDocuments(docs: List<PdfDocumentEntity>) = dao.insertDocuments(docs)

@@ -49,4 +49,12 @@ class ExampleRobolectricTest {
         assertNotNull(ReadingTheme.DARK.toColorMatrix())
         assertNotNull(ReadingTheme.CANDLE.toColorMatrix())
     }
+
+    @Test
+    fun `main activity launches without crashing`() {
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        assertNotNull(activity)
+        controller.pause().stop().destroy()
+    }
 }

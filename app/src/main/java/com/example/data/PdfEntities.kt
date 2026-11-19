@@ -13,7 +13,7 @@ data class PdfDocumentEntity(
     val filePath: String,
     val folderName: String,
     val storageVolume: String = "Internal storage",
-    val author: String = "NCERT & Exam Board",
+    val author: String = "Device Storage",
     val sizeBytes: Long,
     val pageCount: Int,
     val currentPage: Int = 0,

@@ -23,21 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.BrightnessHigh
-import androidx.compose.material.icons.filled.BrightnessLow
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.DriveFileMove
-import androidx.compose.material.icons.filled.FormatQuote
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
-import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,8 +48,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +70,8 @@ import com.example.data.BookmarkEntity
 import com.example.data.PdfDocumentEntity
 import com.example.data.QuoteEntity
 import com.example.data.ReadingTheme
-import com.example.pdf.BundledPdfSeeder
+import com.example.pdf.DocumentOutlineItem
+import com.example.pdf.PdfTextExtractor
 import com.example.ui.theme.BurgundyBadgeBg
 import com.example.ui.theme.BurgundyBadgeText
 import com.example.viewmodel.ReaderSettingsState
@@ -90,8 +84,8 @@ fun ReadingSettingsBottomSheet(
     onBrightnessChange: (Float) -> Unit,
     onUseSystemBrightnessChange: (Boolean) -> Unit,
     onSelectReadingTheme: (ReadingTheme) -> Unit,
-    onVerticalScrollChange: (Boolean) -> Unit,
-    onSwipeByPageChange: (Boolean) -> Unit,
+    onHorizontalScrollChange: (Boolean) -> Unit,
+    onBookModeChange: (Boolean) -> Unit,
     onShowScrollBarChange: (Boolean) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -123,7 +117,7 @@ fun ReadingSettingsBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.BrightnessLow,
+                    imageVector = OrionIcons.BrightnessLow,
                     contentDescription = "Low brightness",
                     tint = Color(0xFFA29A97),
                     modifier = Modifier.size(26.dp)
@@ -144,7 +138,7 @@ fun ReadingSettingsBottomSheet(
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Icon(
-                    imageVector = Icons.Default.BrightnessHigh,
+                    imageVector = OrionIcons.BrightnessHigh,
                     contentDescription = "High brightness",
                     tint = Color(0xFFA29A97),
                     modifier = Modifier.size(26.dp)
@@ -157,7 +151,8 @@ fun ReadingSettingsBottomSheet(
                 label = "Use system brightness",
                 checked = settings.useSystemBrightness,
                 onCheckedChange = onUseSystemBrightnessChange,
-                testTag = "switch_system_brightness"
+                testTag = "switch_system_brightness",
+                useDarkSurfaceStyling = true
             )
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -209,19 +204,21 @@ fun ReadingSettingsBottomSheet(
             Spacer(modifier = Modifier.height(22.dp))
 
             ReadingSettingSwitchRow(
-                label = "Vertical scroll",
-                checked = settings.verticalScroll,
-                onCheckedChange = onVerticalScrollChange,
-                testTag = "switch_vertical_scroll"
+                label = "Horizontal scroll",
+                checked = settings.horizontalScroll,
+                onCheckedChange = onHorizontalScrollChange,
+                testTag = "switch_horizontal_scroll",
+                useDarkSurfaceStyling = true
             )
 
             Spacer(modifier = Modifier.height(10.dp))
 
             ReadingSettingSwitchRow(
-                label = "Swipe by page",
-                checked = settings.swipeByPage,
-                onCheckedChange = onSwipeByPageChange,
-                testTag = "switch_swipe_by_page"
+                label = "Book mode",
+                checked = settings.bookMode,
+                onCheckedChange = onBookModeChange,
+                testTag = "switch_book_mode",
+                useDarkSurfaceStyling = true
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -230,7 +227,8 @@ fun ReadingSettingsBottomSheet(
                 label = "Show scroll bar",
                 checked = settings.showScrollBar,
                 onCheckedChange = onShowScrollBarChange,
-                testTag = "switch_show_scroll_bar"
+                testTag = "switch_show_scroll_bar",
+                useDarkSurfaceStyling = true
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -340,8 +338,15 @@ fun ReadingSettingSwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    testTag: String
+    testTag: String,
+    useDarkSurfaceStyling: Boolean = false
 ) {
+    val labelColor = if (useDarkSurfaceStyling) {
+        Color(0xFFDAD2CF)
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -351,9 +356,11 @@ fun ReadingSettingSwitchRow(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.5.sp),
-            color = Color(0xFFDAD2CF),
-            modifier = Modifier.weight(1f)
+            style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.5.sp),
+            color = labelColor,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp)
         )
 
         Switch(
@@ -364,18 +371,22 @@ fun ReadingSettingSwitchRow(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
-                        tint = Color(0xFFD99B93),
+                        tint = if (useDarkSurfaceStyling) Color(0xFFD99B93) else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
             } else null,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF5C1E1B),
-                checkedTrackColor = Color(0xFFD99B93),
-                uncheckedThumbColor = Color(0xFF938B88),
-                uncheckedTrackColor = Color(0xFF332E2E),
-                uncheckedBorderColor = Color(0xFF8C8481)
-            ),
+            colors = if (useDarkSurfaceStyling) {
+                SwitchDefaults.colors(
+                    checkedThumbColor = Color(0xFF5C1E1B),
+                    checkedTrackColor = Color(0xFFD99B93),
+                    uncheckedThumbColor = Color(0xFF938B88),
+                    uncheckedTrackColor = Color(0xFF332E2E),
+                    uncheckedBorderColor = Color(0xFF8C8481)
+                )
+            } else {
+                SwitchDefaults.colors()
+            },
             modifier = Modifier.testTag(testTag)
         )
     }
@@ -390,6 +401,8 @@ fun DocumentActionBottomSheet(
     onOpenWith: () -> Unit,
     onPrint: () -> Unit,
     onShowFileInfo: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onExportAnnotatedPdf: () -> Unit,
     onStartReadAloud: () -> Unit,
     onStartAutoScroll: () -> Unit,
     onOpenBookmarks: () -> Unit,
@@ -443,7 +456,7 @@ fun DocumentActionBottomSheet(
                     testTag = "doc_action_share"
                 )
                 TopQuickActionTile(
-                    icon = Icons.AutoMirrored.Filled.OpenInNew,
+                    icon = OrionIcons.OpenInNew,
                     label = "Open with",
                     onClick = {
                         onDismiss()
@@ -453,7 +466,7 @@ fun DocumentActionBottomSheet(
                     testTag = "doc_action_open_with"
                 )
                 TopQuickActionTile(
-                    icon = Icons.Default.Print,
+                    icon = OrionIcons.Print,
                     label = "Print",
                     onClick = {
                         onDismiss()
@@ -477,7 +490,27 @@ fun DocumentActionBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             SheetMenuRow(
-                icon = Icons.Default.Headphones,
+                icon = if (doc.isFavorite) Icons.Default.Star else OrionIcons.StarBorder,
+                label = if (doc.isFavorite) "Remove from Favorites" else "Add to Favorites",
+                onClick = {
+                    onDismiss()
+                    onToggleFavorite()
+                },
+                testTag = "doc_action_favorite"
+            )
+
+            SheetMenuRow(
+                icon = OrionIcons.SaveAlt,
+                label = "Export annotated PDF copy",
+                onClick = {
+                    onDismiss()
+                    onExportAnnotatedPdf()
+                },
+                testTag = "doc_action_export_annotated"
+            )
+
+            SheetMenuRow(
+                icon = OrionIcons.Headphones,
                 label = "Read aloud",
                 showProBadge = true,
                 onClick = {
@@ -488,7 +521,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Default.KeyboardDoubleArrowDown,
+                icon = OrionIcons.KeyboardDoubleArrowDown,
                 label = "Auto-scroll",
                 showProBadge = true,
                 onClick = {
@@ -504,7 +537,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Default.BookmarkBorder,
+                icon = OrionIcons.BookmarkBorder,
                 label = "Bookmarks",
                 onClick = {
                     onDismiss()
@@ -514,7 +547,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Default.FormatQuote,
+                icon = OrionIcons.FormatQuote,
                 label = "Quotes",
                 onClick = {
                     onDismiss()
@@ -539,7 +572,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Outlined.Folder,
+                icon = OrionIcons.FolderOutlined,
                 label = "Show in folder",
                 onClick = {
                     onDismiss()
@@ -549,7 +582,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Default.DriveFileMove,
+                icon = OrionIcons.DriveFileMove,
                 label = "Move to custom folder",
                 onClick = {
                     onDismiss()
@@ -564,7 +597,7 @@ fun DocumentActionBottomSheet(
             )
 
             SheetMenuRow(
-                icon = Icons.Default.DeleteOutline,
+                icon = OrionIcons.DeleteOutline,
                 label = "Delete",
                 onClick = {
                     onDismiss()
@@ -675,9 +708,22 @@ fun ContentsBookmarksQuotesSheet(
     onDeleteAnnotation: (AnnotationEntity) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(initialTab) }
-    val chapters = remember(doc.title, doc.pageCount) {
-        BundledPdfSeeder.getDocumentOutline(doc.title, doc.pageCount)
+    var chapters by remember(doc.filePath, doc.pageCount) {
+        mutableStateOf(
+            (0 until doc.pageCount.coerceAtLeast(1)).map { idx ->
+                DocumentOutlineItem(
+                    title = "Page ${idx + 1}",
+                    subtitle = doc.title,
+                    pageIndex = idx
+                )
+            }
+        )
+    }
+
+    LaunchedEffect(doc.filePath, doc.pageCount) {
+        chapters = PdfTextExtractor.buildDocumentOutline(context, doc.filePath, doc.title, doc.pageCount)
     }
 
     ModalBottomSheet(
@@ -927,6 +973,50 @@ fun FileInfoDialog(
         confirmButton = {
             Button(onClick = onDismiss) {
                 Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun DeleteDocumentConfirmDialog(
+    doc: PdfDocumentEntity,
+    onRemoveFromLibrary: () -> Unit,
+    onDeleteFromDevice: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete '${doc.title.take(28)}'?") },
+        text = {
+            Text(
+                text = "You can remove this document from Orion's library list only, or permanently delete the PDF file from your phone storage.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onDeleteFromDevice()
+                    onDismiss()
+                }
+            ) {
+                Text("Delete from Phone")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+                TextButton(
+                    onClick = {
+                        onRemoveFromLibrary()
+                        onDismiss()
+                    }
+                ) {
+                    Text("Remove from List")
+                }
             }
         }
     )

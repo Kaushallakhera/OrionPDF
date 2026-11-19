@@ -28,24 +28,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Feedback
-import androidx.compose.material.icons.filled.FormatQuote
-import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -89,10 +74,13 @@ import com.example.viewmodel.ReaderSettingsState
 @Composable
 fun HomeMoreBottomSheet(
     appThemeMode: AppThemeMode,
+    hasStoragePermission: Boolean,
     onDismiss: () -> Unit,
     onOpenProVersionScreen: () -> Unit,
     onSelectAppTheme: (AppThemeMode) -> Unit,
     onPickPdfFromDevice: () -> Unit,
+    onPickFolderFromDevice: () -> Unit,
+    onManageStoragePermission: () -> Unit,
     onRescanStorage: () -> Unit,
     onOpenSettingsDialog: () -> Unit,
     onLeaveRating: () -> Unit,
@@ -185,9 +173,9 @@ fun HomeMoreBottomSheet(
                     AppThemeMode.entries.forEach { mode ->
                         val selected = appThemeMode == mode
                         val icon = when (mode) {
-                            AppThemeMode.SYSTEM -> Icons.Default.Brightness6
-                            AppThemeMode.LIGHT -> Icons.Default.LightMode
-                            AppThemeMode.DARK -> Icons.Default.DarkMode
+                            AppThemeMode.SYSTEM -> OrionIcons.Brightness6
+                            AppThemeMode.LIGHT -> OrionIcons.LightMode
+                            AppThemeMode.DARK -> OrionIcons.DarkMode
                         }
                         Box(
                             modifier = Modifier
@@ -237,7 +225,7 @@ fun HomeMoreBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.UploadFile,
+                    imageVector = OrionIcons.UploadFile,
                     contentDescription = null,
                     tint = Color(0xFFA79E9B),
                     modifier = Modifier.size(24.dp)
@@ -258,6 +246,16 @@ fun HomeMoreBottomSheet(
             }
 
             HomeMenuSimpleRow(
+                icon = OrionIcons.FolderOutlined,
+                label = "Add folder from device",
+                onClick = {
+                    onDismiss()
+                    onPickFolderFromDevice()
+                },
+                testTag = "menu_add_folder_from_device"
+            )
+
+            HomeMenuSimpleRow(
                 icon = Icons.Default.Refresh,
                 label = "Rescan storage",
                 onClick = {
@@ -266,6 +264,18 @@ fun HomeMoreBottomSheet(
                 },
                 testTag = "menu_rescan_storage"
             )
+
+            if (!hasStoragePermission) {
+                HomeMenuSimpleRow(
+                    icon = Icons.Default.Settings,
+                    label = "Grant All Files Access",
+                    onClick = {
+                        onDismiss()
+                        onManageStoragePermission()
+                    },
+                    testTag = "menu_grant_storage_permission"
+                )
+            }
 
             HomeMenuSimpleRow(
                 icon = Icons.Default.Settings,
@@ -283,7 +293,7 @@ fun HomeMoreBottomSheet(
             )
 
             HomeMenuSimpleRow(
-                icon = Icons.Default.RateReview,
+                icon = OrionIcons.RateReview,
                 label = "Leave a rating",
                 onClick = {
                     onDismiss()
@@ -293,7 +303,7 @@ fun HomeMoreBottomSheet(
             )
 
             HomeMenuSimpleRow(
-                icon = Icons.Default.Feedback,
+                icon = OrionIcons.Feedback,
                 label = "Feedback",
                 onClick = {
                     onDismiss()
@@ -305,7 +315,7 @@ fun HomeMoreBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Version 1.18.2 • Pro Unlocked",
+                text = "Version 1.2 • Pro Unlocked",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF8C827F),
                 textAlign = TextAlign.Center,
@@ -499,12 +509,12 @@ fun ProVersionShowcaseScreen(
 
             // Highlighted Top 3 Red-Circle Feature Rows matching Screenshot 7
             ProHighlightedFeatureRow(
-                icon = Icons.Default.Block,
+                icon = OrionIcons.Block,
                 title = "Remove ads",
                 subtitle = "Read PDFs without banner ads"
             )
             ProHighlightedFeatureRow(
-                icon = Icons.Default.ContentCopy,
+                icon = OrionIcons.ContentCopy,
                 title = "Text selection tools",
                 subtitle = "Share, translate, and search selected text"
             )
@@ -521,32 +531,32 @@ fun ProVersionShowcaseScreen(
 
             // Remaining 8 Feature Rows matching Screenshot 7
             ProStandardFeatureRow(
-                icon = Icons.Default.Headphones,
+                icon = OrionIcons.Headphones,
                 title = "Read aloud",
                 subtitle = "Listen to your PDF in the device voice"
             )
             ProStandardFeatureRow(
-                icon = Icons.Default.KeyboardDoubleArrowDown,
+                icon = OrionIcons.KeyboardDoubleArrowDown,
                 title = "Auto-scroll",
                 subtitle = "Hands-free scrolling at your reading pace"
             )
             ProStandardFeatureRow(
-                icon = Icons.Default.Palette,
+                icon = OrionIcons.Palette,
                 title = "Reading themes",
                 subtitle = "5 calm page colors for day and night reading"
             )
             ProStandardFeatureRow(
-                icon = Icons.Default.FormatQuote,
+                icon = OrionIcons.FormatQuote,
                 title = "Save & manage quotes",
                 subtitle = "Highlight passages and build a personal quote library"
             )
             ProStandardFeatureRow(
-                icon = Icons.Default.BookmarkBorder,
+                icon = OrionIcons.BookmarkBorder,
                 title = "Enhanced bookmarks",
                 subtitle = "Title your bookmarks and navigate across all your PDFs"
             )
             ProStandardFeatureRow(
-                icon = Icons.Outlined.Folder,
+                icon = OrionIcons.FolderOutlined,
                 title = "Custom folder organization",
                 subtitle = "Move PDFs into your own folders and keep your library tidy"
             )
@@ -556,7 +566,7 @@ fun ProVersionShowcaseScreen(
                 subtitle = "Keep a continue-reading shortcut pinned in your notifications"
             )
             ProStandardFeatureRow(
-                icon = Icons.Default.History,
+                icon = OrionIcons.History,
                 title = "Auto-resume last PDF",
                 subtitle = "Automatically open where you left off every time you launch the app"
             )
@@ -699,45 +709,73 @@ private fun StackedPdfPagesIllustration(modifier: Modifier = Modifier) {
 @Composable
 fun AppSettingsAndSideloadDialog(
     settings: ReaderSettingsState,
+    hasStoragePermission: Boolean,
     onAutoResumeChange: (Boolean) -> Unit,
-    onVerticalScrollChange: (Boolean) -> Unit,
+    onHorizontalScrollChange: (Boolean) -> Unit,
     onShowScrollBarChange: (Boolean) -> Unit,
+    onAutoScanOnLaunchChange: (Boolean) -> Unit,
+    onManageStoragePermission: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Orion PDF Settings & APK Info") },
+        title = {
+            Text(
+                text = "Orion PDF Settings",
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 ReadingSettingSwitchRow(
                     label = "Auto-resume last PDF",
                     checked = settings.autoResumeLastPdf,
                     onCheckedChange = onAutoResumeChange,
-                    testTag = "settings_auto_resume_switch"
+                    testTag = "settings_auto_resume_switch",
+                    useDarkSurfaceStyling = false
                 )
                 ReadingSettingSwitchRow(
-                    label = "Vertical scroll by default",
-                    checked = settings.verticalScroll,
-                    onCheckedChange = onVerticalScrollChange,
-                    testTag = "settings_vertical_scroll_switch"
+                    label = "Horizontal scroll by default",
+                    checked = settings.horizontalScroll,
+                    onCheckedChange = onHorizontalScrollChange,
+                    testTag = "settings_horizontal_scroll_switch",
+                    useDarkSurfaceStyling = false
                 )
                 ReadingSettingSwitchRow(
                     label = "Show scroll bar",
                     checked = settings.showScrollBar,
                     onCheckedChange = onShowScrollBarChange,
-                    testTag = "settings_scrollbar_switch"
+                    testTag = "settings_scrollbar_switch",
+                    useDarkSurfaceStyling = false
+                )
+                ReadingSettingSwitchRow(
+                    label = "Device storage auto-scan",
+                    checked = settings.autoScanStorageOnLaunch,
+                    onCheckedChange = onAutoScanOnLaunchChange,
+                    testTag = "settings_auto_scan_switch",
+                    useDarkSurfaceStyling = false
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 Text(
-                    text = "Sideloading APK onto Your Device:",
+                    text = if (hasStoragePermission) {
+                        "Device Storage Permission: Granted"
+                    } else {
+                        "Device Storage Permission: File/Folder Picker Only"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    text = "To install this app on your phone for offline testing, open the AI Studio Settings / Export menu at the top right to download the signed APK directly, or export the project ZIP.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        onManageStoragePermission()
+                    }
+                ) {
+                    Text(if (hasStoragePermission) "Manage Storage Permission" else "Grant All Files Access")
+                }
             }
         },
         confirmButton = {

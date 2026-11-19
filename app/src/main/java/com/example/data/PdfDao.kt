@@ -18,11 +18,20 @@ interface PdfDao {
     @Query("SELECT * FROM pdf_documents WHERE isFavorite = 1 ORDER BY title COLLATE NOCASE ASC")
     fun observeFavoriteDocuments(): Flow<List<PdfDocumentEntity>>
 
+    @Query("SELECT * FROM pdf_documents ORDER BY title COLLATE NOCASE ASC")
+    suspend fun getAllDocumentsOnce(): List<PdfDocumentEntity>
+
     @Query("SELECT COUNT(*) FROM pdf_documents")
     suspend fun getDocumentCount(): Int
 
     @Query("SELECT * FROM pdf_documents WHERE id = :id LIMIT 1")
     suspend fun getDocumentById(id: Long): PdfDocumentEntity?
+
+    @Query("SELECT * FROM pdf_documents WHERE filePath = :filePath LIMIT 1")
+    suspend fun getDocumentByPath(filePath: String): PdfDocumentEntity?
+
+    @Query("SELECT * FROM annotations WHERE documentId = :docId ORDER BY pageIndex ASC, createdAt ASC")
+    suspend fun getAnnotationsForDocOnce(docId: Long): List<AnnotationEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDocument(doc: PdfDocumentEntity): Long

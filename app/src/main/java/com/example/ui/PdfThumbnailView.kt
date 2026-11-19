@@ -8,9 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -26,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.ReadingTheme
@@ -43,6 +41,7 @@ fun PdfThumbnailView(
     cornerRadius: Dp = 8.dp,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val bucketWidth = ((targetWidthPx + 63) / 64) * 64
     var bitmap by remember(filePath, pageIndex, bucketWidth) {
         mutableStateOf(PdfRenderEngine.getCachedBitmap(filePath, pageIndex, bucketWidth))
@@ -50,7 +49,7 @@ fun PdfThumbnailView(
 
     LaunchedEffect(filePath, pageIndex, bucketWidth) {
         if (bitmap == null) {
-            bitmap = PdfRenderEngine.renderPage(filePath, pageIndex, bucketWidth)
+            bitmap = PdfRenderEngine.renderPage(context, filePath, pageIndex, bucketWidth)
         }
     }
 
@@ -77,7 +76,7 @@ fun PdfThumbnailView(
             )
         } else {
             Icon(
-                imageVector = Icons.Outlined.Description,
+                imageVector = OrionIcons.DescriptionOutlined,
                 contentDescription = "Loading PDF preview",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(24.dp)
